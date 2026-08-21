@@ -119,6 +119,31 @@ class ABEVariant:
         else: 
             return self.variant_genomic_1_p + self.variant_p_in_window - window_p
 
+    @property
+    def relevant_transcripts(self):
+        return hgvs.easy.am38.relevant_transcripts(self.var_g)
+
+    @property
+    def var_c(self):
+        # TODO: deal with hard coded 1 here!
+        return hgvs.easy.g_to_c(self.var_g, self.relevant_transcripts[1])
+
+    @property
+    def MANE_transcript(self):
+        return ensembl.transcript_by_id(self.MANE_transcript_id)
+
+    @property
+    def gene(self):
+        return ensembl.gene_name_of_gene_id(self.MANE_transcript.gene_id)
+
+    @property
+    def label(self):
+        return f'{self.var_g}\n{self.var_c}\n{self.gene} {self.effect.short_description}'
+
+    @property
+    def simple_label(self):
+        return f'{self.var_g}'
+
     @hits.utilities.memoized_property
     def possible_bystander_effects(self):
         possible_bystander_effects = {}
@@ -188,6 +213,17 @@ class ABEVariant:
 
         return PAMs
 
+    def has_usable_PAM(self, editor):
+        PAMs = self.PAMs_with_variant_in_optimal_window(editor)
+
+        has_usable_PAM = False
+    
+        for PAM in PAMs.values():
+            if not any(not isinstance(effect['effect'], varcode.effects.Silent) for effect in PAM['bystander_effects']):
+                has_usable_PAM = True
+
+        return has_usable_PAM
+
 def effect_to_color(effect):
     if isinstance(effect, varcode.effects.Silent):
         color = 'orange'
@@ -196,6 +232,9 @@ def effect_to_color(effect):
     else:
         color = 'purple'
     return color
+
+def PAM_is_usable(PAM):
+    return not any(not isinstance(effect['effect'], varcode.effects.Silent) for effect in PAM['bystander_effects'])
 
 class VariantDiagram:
 
@@ -602,7 +641,7 @@ class VariantDiagram:
 
         # Draw optimal editing window.
 
-        window_height = height / 5
+        window_height = height / 3
         window_y0 = protospacer_y1 + 0.01 * height
 
         optimal_offsets = PAM['editor'].deaminase.optimal_variant_offsets_from_PAM
@@ -701,11 +740,11 @@ class VariantDiagram:
         annotate_in_window_coords(PAM['editor'].name,
                          protospacer_x0 - 0.5,
                            protospacer_y1,
-                         xytext=(1, 6),
+                         xytext=(1, 9),
                          textcoords='offset points',
                          ha='left',
                          va='bottom',
-                         size=6,
+                         size=8,
                         )
 
     def draw_legend(self):
@@ -715,7 +754,7 @@ class VariantDiagram:
             ('pathogenic variant', 'tab:green'),
             ('synonymous', 'orange'),
             ('nonsynonymous', 'red'),
-            ('intronic', 'purple'),
+            ('intronic/other', 'purple'),
         ]):
             
             self.ax.annotate(label,
@@ -734,17 +773,14 @@ class VariantDiagram:
     def plot(self, editor):
         self.draw_sequence()
 
-        transcript = ensembl.transcript_by_id(self.variant.MANE_transcript_id)
-        self.draw_transcript(transcript)
-
-        variant_label = f'{self.variant.var_g_name}\n{ensembl.gene_name_of_gene_id(transcript.gene_id)} {self.variant.effect.short_description}'
+        self.draw_transcript(self.variant.MANE_transcript)
 
         PAMs = self.variant.PAMs_with_variant_in_optimal_window(editor)
 
         max_y = 0
 
         for protospacer_i, p in enumerate(PAMs):
-            y = 2 + 1.5 * protospacer_i
+            y = 2 + 1.75 * protospacer_i
             self.draw_protospacer(PAMs, p, y)
 
             max_y = max(y, max_y)
@@ -753,14 +789,13 @@ class VariantDiagram:
 
         self.ax.axis('off')
 
-        self.ax.annotate(variant_label,
+        self.ax.annotate(self.variant.label,
                          xy=(self.variant.variant_genomic_1_p, max(5, max_y + 2)),
                          xycoords='data',
                          color='tab:green',
                          annotation_clip=False,
                          ha='center',
                          size=8,
-                         weight='bold',
                         )
 
         self.ax.annotate('···',
