@@ -39,12 +39,24 @@ ABE8e = AdenineDeaminase('ABE8e',
                           bystander_window = np.arange(3, 11 + 1),
                          )
 
-ABE820_NRRH = Editor(ABE820, 'NRRH')
-ABE820_NRCH = Editor(ABE820, 'NRCH')
-ABE820_SpRY = Editor(ABE820, 'NRN')
+ABE710_HRHSK = AdenineDeaminase('ABE7.10-HRHSK',
+                          optimal_window=np.arange(5, 7 + 1),
+                          bystander_window = np.arange(4, 8 + 1),
+                         )
 
-ABE8e_SpRY = Editor(ABE8e, 'NRN')
-ABE8e_SpRY = Editor(ABE8e, 'NRRH')
+PAMs = [
+    #'NNN',
+    'NGG',
+    'NRTH',
+    'NRCH',
+    'NRRH',
+]
+
+editors = {}
+
+for deaminase in [ABE820, ABE8e, ABE710_HRHSK]:
+    for PAM in PAMs:
+        editors[deaminase.name, PAM] = Editor(deaminase, PAM)
 
 class ABEVariant:
     window_on_each_side = 30
