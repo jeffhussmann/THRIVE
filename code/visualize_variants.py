@@ -19,8 +19,11 @@ class AdenineDeaminase:
         self.optimal_window = optimal_window
         self.bystander_window = bystander_window
 
-        self.optimal_variant_offsets_from_PAM = [-20 + p - 1 for p in optimal_window]
-        self.possible_bystander_offsets_from_PAM = [-20 + p - 1 for p in bystander_window]
+        self.offsets_from_PAM = {
+            'optimal_window': [-20 + p - 1 for p in optimal_window],
+            'bystander_window': [-20 + p - 1 for p in bystander_window],
+            'entire_protospacer': [-20 + p - 1 for p in np.arange(1, 20 + 1)], 
+        }
 
 class Editor:
     def __init__(self, deaminase, PAM):
@@ -31,21 +34,21 @@ class Editor:
 
 ABE820 = AdenineDeaminase('ABE8.20',
                           optimal_window=np.arange(4, 7 + 1),
-                          bystander_window = np.arange(3, 9 + 1),
+                          bystander_window=np.arange(3, 9 + 1),
                          )
 
 ABE8e = AdenineDeaminase('ABE8e',
                           optimal_window=np.arange(4, 8 + 1),
-                          bystander_window = np.arange(3, 11 + 1),
+                          bystander_window=np.arange(3, 11 + 1),
                          )
 
 ABE710_HRHSK = AdenineDeaminase('ABE7.10-HRHSK',
                           optimal_window=np.arange(5, 7 + 1),
-                          bystander_window = np.arange(4, 8 + 1),
+                          bystander_window=np.arange(4, 8 + 1),
                          )
 
 PAMs = [
-    #'NNN',
+    'NNN',
     'NGG',
     'NRTH',
     'NRCH',
@@ -170,23 +173,15 @@ class ABEVariant:
                 
         return possible_bystander_effects
 
-    def PAMs_with_variant_in_optimal_window(self, editor):
+    def PAMs(self, editor):
         pattern, *PAM_starts = Bio.SeqUtils.nt_search(self.target_strand_window_sequence, editor.PAM)
 
-        PAM_starts_with_variant_in_optimal_window = []
-        
-        for PAM_start in PAM_starts:
-            variant_offset_from_PAM = self.variant_p_in_window - PAM_start
-            if variant_offset_from_PAM in editor.deaminase.optimal_variant_offsets_from_PAM:
-                PAM_starts_with_variant_in_optimal_window.append(PAM_start)
-    
         PAMs = {}
         
-        for PAM_start in PAM_starts_with_variant_in_optimal_window:
-        
+        for PAM_start in PAM_starts:
             bystander_effects = []
         
-            for possible_bystander_offset in  editor.deaminase.possible_bystander_offsets_from_PAM:
+            for possible_bystander_offset in editor.deaminase.offsets_from_PAM['bystander_window']:
                 window_p = PAM_start + possible_bystander_offset
         
                 if window_p in self.possible_bystander_effects:
@@ -199,8 +194,17 @@ class ABEVariant:
                         'window_p': window_p,
                         'genomic_1_p': self.window_p_to_genomic_1_p(window_p),
                     })
+
+            variant_offset_from_PAM = self.variant_p_in_window - PAM_start
+            window_name = 'outside_protospacer'
+            for possible_window_name in ['optimal_window', 'bystander_window', 'entire_protospacer']:
+                if variant_offset_from_PAM in editor.deaminase.offsets_from_PAM[possible_window_name]:
+                    window_name = possible_window_name
+                    break
         
             PAMs[PAM_start] = {
+                'window_name': window_name,
+                'PAM_start': PAM_start,
                 'protospacer': self.target_strand_window_sequence[PAM_start - 20:PAM_start],
                 'PAM': self.target_strand_window_sequence[PAM_start:PAM_start + len(editor.PAM)],
                 'protospacer+PAM': self.target_strand_window_sequence[PAM_start - 20:PAM_start + len(editor.PAM)],
@@ -212,6 +216,15 @@ class ABEVariant:
             }
 
         return PAMs
+
+    def PAMs_with_variant_in_optimal_window(self, editor):
+        return {position: PAM for position, PAM in self.PAMs(editor).items() if PAM['window_name'] == 'optimal_window'}
+
+    def PAMs_with_variant_in_bystander_window(self, editor):
+        return {position: PAM for position, PAM in self.PAMs(editor).items() if PAM['window_name'] in {'optimal_window', 'bystander_window'}}
+
+    def PAMs_with_variant_in_protospacer(self, editor):
+        return {position: PAM for position, PAM in self.PAMs(editor).items() if PAM['window_name'] in {'optimal_window', 'bystander_window', 'entire_protospacer'}}
 
     def has_usable_PAM(self, editor):
         PAMs = self.PAMs_with_variant_in_optimal_window(editor)
@@ -554,7 +567,6 @@ class VariantDiagram:
     
             self.ax.add_patch(patch)
 
-    
             self.ax.annotate(letter,
                              xy=((start + end) / 2, y),
                              xycoords='data',
@@ -567,9 +579,10 @@ class VariantDiagram:
                              weight=weight,
                             )
 
-    def draw_protospacer(self, PAMs, p, y):
-        PAM = PAMs[p]
+    def draw_protospacer(self, PAM, y):
         height = 0.5
+
+        p = PAM['PAM_start']
 
         to_g_1_p = self.variant.window_p_to_genomic_1_p
 
@@ -644,7 +657,7 @@ class VariantDiagram:
         window_height = height / 3
         window_y0 = protospacer_y1 + 0.01 * height
 
-        optimal_offsets = PAM['editor'].deaminase.optimal_variant_offsets_from_PAM
+        optimal_offsets = PAM['editor'].deaminase.offsets_from_PAM['optimal_window']
         optimal_x0 = p + min(optimal_offsets)
         optimal_x1 = p + max(optimal_offsets)
 
@@ -659,7 +672,7 @@ class VariantDiagram:
 
         # Draw broader bystander editing window.
 
-        bystander_offsets = PAM['editor'].deaminase.possible_bystander_offsets_from_PAM
+        bystander_offsets = PAM['editor'].deaminase.offsets_from_PAM['bystander_window']
         bystander_x0 = p + min(bystander_offsets)
         bystander_x1 = p + max(bystander_offsets)
 
@@ -770,27 +783,34 @@ class VariantDiagram:
 
             cumulative_offset -= 12
 
-    def plot(self, editor):
+    def plot(self, editor_keys):
         self.draw_sequence()
 
         self.draw_transcript(self.variant.MANE_transcript)
 
-        PAMs = self.variant.PAMs_with_variant_in_optimal_window(editor)
+        all_PAMs = []
+
+        for editor_key in editor_keys:
+            PAMs = self.variant.PAMs_with_variant_in_protospacer(editors[editor_key])
+            all_PAMs.extend(list(PAMs.values()))
+
+        all_PAMs = sorted(all_PAMs, key=lambda d: d['PAM_start'])
 
         max_y = 0
 
-        for protospacer_i, p in enumerate(PAMs):
+        for protospacer_i, PAM in enumerate(all_PAMs):
             y = 2 + 1.75 * protospacer_i
-            self.draw_protospacer(PAMs, p, y)
+            self.draw_protospacer(PAM, y)
 
-            max_y = max(y, max_y)
+            if self.variant.strand == '+':
+                max_y = max(y, max_y)
 
         self.draw_legend()
 
         self.ax.axis('off')
 
         self.ax.annotate(self.variant.label,
-                         xy=(self.variant.variant_genomic_1_p, max(5, max_y + 2)),
+                         xy=(self.variant.variant_genomic_1_p, max(3, max_y + 2)),
                          xycoords='data',
                          color='tab:green',
                          annotation_clip=False,
