@@ -64,11 +64,14 @@ for deaminase in [ABE820, ABE8e, ABE710_HRHSK]:
 class ABEVariant:
     window_on_each_side = 30
 
-    def __init__(self, var_g_name, MANE_transcript_id=None):
-        self.var_g_name = var_g_name
-        self.MANE_transcript_id = MANE_transcript_id
+    def __init__(self, var_g, MANE_row):
+        if isinstance(var_g, str):
+            var_g = hgvs.easy.parse(var_g)
 
-        self.var_g =  hgvs.easy.parse(self.var_g_name)
+        self.refseq_nuc = MANE_row['RefSeq_nuc']
+        self.ensembl_nuc = MANE_row['Ensembl_nuc'].split('.')[0]
+
+        self.var_g = var_g
 
         self.contig = str(int(self.var_g.ac.split('.')[0].split('_')[-1]))
         if self.contig == '23':
@@ -109,10 +112,7 @@ class ABEVariant:
     def get_effect(self, variant):
         effects = variant.effects()
         
-        if self.MANE_transcript_id is not None:
-            effect = effects.top_priority_effect_per_transcript_id()[self.MANE_transcript_id]
-        else:
-            effect = effects.top_priority_effect()
+        effect = effects.top_priority_effect_per_transcript_id()[self.ensembl_nuc]
 
         return effect
 
@@ -133,7 +133,7 @@ class ABEVariant:
 
     @property
     def MANE_transcript(self):
-        return ensembl.transcript_by_id(self.MANE_transcript_id)
+        return ensembl.transcript_by_id(self.ensembl_nuc)
 
     @property
     def gene(self):
