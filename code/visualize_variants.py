@@ -2,6 +2,7 @@ import Bio.SeqUtils
 import hgvs.easy
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import pyensembl
 import varcode
 
@@ -11,6 +12,18 @@ import hits.utilities
 ensembl = pyensembl.EnsemblRelease(species='human')
 
 genomic_sequence_fetcher = hits.genomes.build_region_fetcher('/home/jah/indices/hg38/fasta')
+
+MANE_transcripts = pd.read_csv('/home/jah/projects/THRIVE/data/MANE.GRCh38.v1.5.summary.txt', sep='\t')
+
+def get_MANE_row(gene_name):
+    rows = MANE_transcripts.query('symbol == @gene_name')
+    
+    if len(rows) != 1:
+        raise ValueError(f'{gene_name} has {len(rows)} rows')
+    
+    MANE_row = rows.iloc[0]
+
+    return MANE_row
 
 class AdenineDeaminase:
     def __init__(self, name, optimal_window, bystander_window):
