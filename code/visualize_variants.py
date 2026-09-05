@@ -137,14 +137,19 @@ class ABEVariant:
         else: 
             return self.variant_genomic_1_p + self.variant_p_in_window - window_p
 
+    def genomic_1_p_to_window_p(self, genomic_1_p):
+        if self.strand == '+':
+            return self.variant_p_in_window + (genomic_1_p - self.variant_genomic_1_p)
+        else: 
+            return self.variant_p_in_window - (genomic_1_p - self.variant_genomic_1_p)
+
     @property
     def relevant_transcripts(self):
         return hgvs.easy.am38.relevant_transcripts(self.var_g)
 
     @property
     def var_c(self):
-        # TODO: deal with hard coded 1 here!
-        return hgvs.easy.g_to_c(self.var_g, self.relevant_transcripts[1])
+        return hgvs.easy.g_to_c(self.var_g, self.refseq_nuc)
 
     @property
     def MANE_transcript(self):
