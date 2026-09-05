@@ -26,60 +26,62 @@ def get_MANE_row(gene_name):
     return MANE_row
 
 class AdenineDeaminase:
-    def __init__(self, name, optimal_window, bystander_window):
+    def __init__(self, name, optimal_window=None, bystander_window=None):
         self.name = name
-        
+
+        if optimal_window is None:
+            optimal_window = [5, 5]
+
+        if bystander_window is None:
+            bystander_window = [1, 20]
+
         self.optimal_window = optimal_window
         self.bystander_window = bystander_window
 
+        optimal_start, optimal_end = self.optimal_window
+        optimal_positions = np.arange(optimal_start, optimal_end + 1)
+
+        bystander_start, bystander_end = self.bystander_window
+        bystander_positions = np.arange(bystander_start, bystander_end + 1)
+
         self.offsets_from_PAM = {
-            'optimal_window': [-20 + p - 1 for p in optimal_window],
-            'bystander_window': [-20 + p - 1 for p in bystander_window],
+            'optimal_window': [-20 + p - 1 for p in optimal_positions],
+            'bystander_window': [-20 + p - 1 for p in bystander_positions],
             'entire_protospacer': [-20 + p - 1 for p in np.arange(1, 20 + 1)], 
         }
 
+deaminase_specs = {
+    'ABE8e': {
+        'optimal_window': [4, 8],
+        'bystander_window': [3, 11],
+    },
+
+    'ABE8.20': {
+        'optimal_window': [4, 7],
+        'bystander_window': [3, 9],
+    },
+
+    'ABE7.10-HRHSK': {
+        'optimal_window': [5, 7],
+        'bystander_window': [4, 8],
+    },
+}
+
+
 class Editor:
-    def __init__(self, deaminase, PAM):
-        self.deaminase = deaminase
+    def __init__(self, deaminase_name, PAM):
+        specs = deaminase_specs.get(deaminase_name, {})
+        self.deaminase = AdenineDeaminase(deaminase_name, **specs)
         self.PAM = PAM
         
-        self.name = f'{self.deaminase.name}_{self.PAM}'
-
-ABE820 = AdenineDeaminase('ABE8.20',
-                          optimal_window=np.arange(4, 7 + 1),
-                          bystander_window=np.arange(3, 9 + 1),
-                         )
-
-ABE8e = AdenineDeaminase('ABE8e',
-                          optimal_window=np.arange(4, 8 + 1),
-                          bystander_window=np.arange(3, 11 + 1),
-                         )
-
-ABE710_HRHSK = AdenineDeaminase('ABE7.10-HRHSK',
-                          optimal_window=np.arange(5, 7 + 1),
-                          bystander_window=np.arange(4, 8 + 1),
-                         )
-
-PAMs = [
-    'NNN',
-    'NGG',
-    'NRTH',
-    'NRCH',
-    'NRRH',
-]
-
-editors = {}
-
-for deaminase in [ABE820, ABE8e, ABE710_HRHSK]:
-    for PAM in PAMs:
-        editors[deaminase.name, PAM] = Editor(deaminase, PAM)
+        self.name = f'{self.deaminase.name} ({self.PAM})'
 
 class ABEVariant:
-    window_on_each_side = 30
-
-    def __init__(self, var_g, MANE_row):
+    def __init__(self, var_g, MANE_row, window_on_each_side=30):
         if isinstance(var_g, str):
             var_g = hgvs.easy.parse(var_g)
+
+        self.window_on_each_side = window_on_each_side
 
         self.refseq_nuc = MANE_row['RefSeq_nuc']
         self.ensembl_nuc = MANE_row['Ensembl_nuc'].split('.')[0]
