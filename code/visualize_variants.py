@@ -1,13 +1,19 @@
+import logging
+
 import Bio.SeqUtils
 import hgvs.easy
+import matplotlib.colors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pyensembl
+import seaborn as sns
 import varcode
 
 import hits.genomes
 import hits.utilities
+
+logger = logging.getLogger(__name__)
 
 ensembl = pyensembl.EnsemblRelease(species='human')
 
@@ -17,13 +23,24 @@ MANE_transcripts = pd.read_csv('/home/jah/projects/THRIVE/data/MANE.GRCh38.v1.5.
 
 def get_MANE_row(gene_name):
     rows = MANE_transcripts.query('symbol == @gene_name')
-    
+
     if len(rows) != 1:
-        raise ValueError(f'{gene_name} has {len(rows)} rows')
-    
+        logger.warning(f'{gene_name} has {len(rows)} rows')
+        rows = rows.query('MANE_status == "MANE Plus Clinical"')
+
+    if len(rows) != 1:
+        raise ValueError
+
     MANE_row = rows.iloc[0]
 
     return MANE_row
+
+def maximize_text_visibility(color):
+    # Taken directly from seaborn's approach to annot in heatmaps.
+    lum = sns.utils.relative_luminance(color)
+    text_color = '.15' if lum > .408 else 'w'
+
+    return text_color
 
 class AdenineDeaminase:
     def __init__(self, name, optimal_window=None, bystander_window=None):
@@ -67,7 +84,6 @@ deaminase_specs = {
     },
 }
 
-
 class Editor:
     def __init__(self, deaminase_name, PAM):
         specs = deaminase_specs.get(deaminase_name, {})
@@ -77,11 +93,11 @@ class Editor:
         self.name = f'{self.deaminase.name} ({self.PAM})'
 
 class ABEVariant:
-    def __init__(self, var_g, MANE_row, window_on_each_side=30):
+    def __init__(self, var_g, gene_name):
         if isinstance(var_g, str):
             var_g = hgvs.easy.parse(var_g)
 
-        self.window_on_each_side = window_on_each_side
+        MANE_row = get_MANE_row(gene_name)
 
         self.refseq_nuc = MANE_row['RefSeq_nuc']
         self.ensembl_nuc = MANE_row['Ensembl_nuc'].split('.')[0]
@@ -105,24 +121,33 @@ class ABEVariant:
 
         if edit == 'G>A':
             self.strand = '+'
+            window_before = 15
+            window_after = 25
+
         elif edit == 'C>T':
             self.strand = '-'
+            window_before = 25
+            window_after = 15
+
         else:
             raise ValueError(edit)
 
         self.other_strand = {'+': '-', '-': '+'}[self.strand]
 
         # TODO: handle if close to edge
-        self.variant_p_in_window = self.window_on_each_side
     
-        window_start = self.variant_genomic_1_p - 1 - self.window_on_each_side
-        window_end = self.variant_genomic_1_p - 1 + self.window_on_each_side + 1
+        window_start = self.variant_genomic_1_p - 1 - window_before
+        window_end = self.variant_genomic_1_p - 1 + window_after + 1
         window_sequence = genomic_sequence_fetcher(f'chr{self.contig}', window_start, window_end).upper()
 
-        self.target_strand_window_sequence = window_sequence[:self.variant_p_in_window] + self.var_g.posedit.edit.alt + window_sequence[self.variant_p_in_window + 1:]
+        self.target_strand_window_sequence = window_sequence[:window_before] + self.var_g.posedit.edit.alt + window_sequence[window_before + 1:]
 
-        if self.strand == '-':
+        if self.strand == '+':
+            self.variant_p_in_window = window_before
+
+        else:
             self.target_strand_window_sequence = hits.utilities.reverse_complement(self.target_strand_window_sequence)
+            self.variant_p_in_window = window_after
 
     def get_effect(self, variant):
         effects = variant.effects()
@@ -200,11 +225,11 @@ class ABEVariant:
 
         return PAMs
 
-    def PAM(self, PAM_start, editor):
+    def PAM(self, PAM_start_window_p, editor):
         bystander_effects = []
     
         for possible_bystander_offset in editor.deaminase.offsets_from_PAM['entire_protospacer']:
-            window_p = PAM_start + possible_bystander_offset
+            window_p = PAM_start_window_p + possible_bystander_offset
     
             if window_p in self.possible_bystander_effects:
                 window_name = None
@@ -220,14 +245,14 @@ class ABEVariant:
                 bystander_effects.append({
                     'window_name': window_name,
                     'effect': effect,
-                    'bystander_offset_from_PAM': window_p - PAM_start,
-                    'bystander_position_in_protospacer': window_p - (PAM_start - 21),
+                    'bystander_offset_from_PAM': window_p - PAM_start_window_p,
+                    'bystander_position_in_protospacer': window_p - (PAM_start_window_p - 21),
                     'actual': possible_bystander_offset,
                     'window_p': window_p,
                     'genomic_1_p': self.window_p_to_genomic_1_p(window_p),
                 })
 
-        variant_offset_from_PAM = self.variant_p_in_window - PAM_start
+        variant_offset_from_PAM = self.variant_p_in_window - PAM_start_window_p
         window_name = 'outside_protospacer'
         for possible_window_name in ['optimal_window', 'bystander_window', 'entire_protospacer']:
             if variant_offset_from_PAM in editor.deaminase.offsets_from_PAM[possible_window_name]:
@@ -236,16 +261,39 @@ class ABEVariant:
     
         PAM = {
             'window_name': window_name,
-            'PAM_start': PAM_start,
-            'protospacer': self.target_strand_window_sequence[PAM_start - 20:PAM_start],
-            'PAM': self.target_strand_window_sequence[PAM_start:PAM_start + len(editor.PAM)],
-            'protospacer+PAM': self.target_strand_window_sequence[PAM_start - 20:PAM_start + len(editor.PAM)],
+            'PAM_start': PAM_start_window_p,
+            'protospacer': self.target_strand_window_sequence[PAM_start_window_p - 20:PAM_start_window_p],
+            'PAM': self.target_strand_window_sequence[PAM_start_window_p:PAM_start_window_p + len(editor.PAM)],
+            'protospacer+PAM': self.target_strand_window_sequence[PAM_start_window_p - 20:PAM_start_window_p + len(editor.PAM)],
             'bystander_effects': bystander_effects,
             'strand': self.strand,
-            'variant_offset_from_PAM': self.variant_p_in_window - PAM_start,
-            'variant_position_in_protospacer': self.variant_p_in_window - (PAM_start - 21),
+            'variant_offset_from_PAM': self.variant_p_in_window - PAM_start_window_p,
+            'variant_position_in_protospacer': self.variant_p_in_window - (PAM_start_window_p - 21),
             'editor': editor,
         }
+
+        return PAM
+
+    def PAM_from_editing_strategy(self, editing_strategy, editor):
+        if editing_strategy.primary_protospacer is None:
+            PAM = None
+
+        else:
+            # First convert from target coords to genomic coords,
+            # then genomic coords to windows coords.
+
+            feature = editing_strategy.PAM_features[f'{editing_strategy.primary_protospacer}_PAM']
+
+            if feature.strand == '+':
+                PAM_start = feature.start
+            else:
+                PAM_start = feature.end
+            
+            PAM_start += editing_strategy.parameters['extracted_target_region']['target_start'] + 1
+    
+            PAM_start_window_p = self.genomic_1_p_to_window_p(PAM_start)
+
+            PAM = self.PAM(PAM_start_window_p, editor)
 
         return PAM
 
@@ -258,24 +306,41 @@ class ABEVariant:
     def PAMs_with_variant_in_protospacer(self, editor):
         return {position: PAM for position, PAM in self.PAMs(editor).items() if PAM['window_name'] in {'optimal_window', 'bystander_window', 'entire_protospacer'}}
 
-    def has_usable_PAM(self, editor):
+    def usable_PAMs(self, editor):
         PAMs = self.PAMs_with_variant_in_optimal_window(editor)
+        usable_PAMs = {position: PAM for position, PAM in PAMs.items() if PAM_is_usable(PAM)}
+        return usable_PAMs
 
-        has_usable_PAM = any(PAM_is_usable(PAM) for PAM in PAMs.values())
-    
-        return has_usable_PAM
+    def has_usable_PAM(self, editor):
+        return len(self.usable_PAMs(editor)) > 0
+
+effect_type_to_color = {
+    varcode.effects.Silent: 'orange',
+    varcode.effects.Substitution: 'red',
+    type(None): 'grey', # represents non-A
+    'other': 'purple',
+    'pathogenic': 'green',
+}
+
+effect_type_to_cmap = {}
+for effect_type, color in effect_type_to_color.items():
+    cmap_name = f'{color[0].upper()}{color[1:]}s'
+    cmap = plt.get_cmap(cmap_name)
+    effect_type_to_cmap[effect_type] = cmap
 
 def effect_to_color(effect):
-    if isinstance(effect, varcode.effects.Silent):
-        color = 'orange'
-    elif isinstance(effect, varcode.effects.Substitution):
-        color = 'red'
-    else:
-        color = 'purple'
-    return color
+    return effect_type_to_color.get(type(effect), effect_type_to_color['other'])
+
+def effect_to_cmap(effect):
+    return effect_type_to_cmap.get(type(effect), effect_type_to_cmap['other'])
 
 def PAM_is_usable(PAM):
-    return not any((effect['window_name'] == 'bystander_window') and (not isinstance(effect['effect'], varcode.effects.Silent)) for effect in PAM['bystander_effects'])
+    def is_unacceptable(effect):
+        in_window = effect['window_name'] in ['bystander_window', 'optimal_window']
+        bad_effect = not isinstance(effect['effect'], varcode.effects.Silent)
+        return in_window and bad_effect
+        
+    return not any(is_unacceptable(effect) for effect in PAM['bystander_effects'])
 
 class VariantDiagram:
 
@@ -284,11 +349,12 @@ class VariantDiagram:
     def __init__(self, variant):
         self.variant = variant
 
-        self.fig, self.ax = plt.subplots(figsize=(10, 4))
-
         min_window_p = 0
         max_window_p = len(self.variant.target_strand_window_sequence) - 1
         self.x_min, self.x_max = sorted(map(self.variant.window_p_to_genomic_1_p, [min_window_p, max_window_p]))
+
+        width = (self.x_max - self.x_min) * 10 / 40
+        self.fig, self.ax = plt.subplots(figsize=(width, 4))
 
     def draw_sequence(self):
         ax = self.ax
@@ -376,7 +442,7 @@ class VariantDiagram:
                                    )
                 ax.add_patch(patch)
         
-        ax.set_xlim(self.x_min, self.x_max)
+        ax.set_xlim(self.x_min - 0.5, self.x_max + 0.5)
         
         ax.set_ylim(-5, 5)
 
@@ -387,6 +453,8 @@ class VariantDiagram:
                   clip_to_window=True,
                   line_width=1,
                   label=None,
+                  label_offset=(0, 3),
+                  label_corner='upper left',
                  ):
         
         if clip_to_window:
@@ -417,13 +485,33 @@ class VariantDiagram:
         self.ax.add_patch(patch)
 
         if label is not None:
+            if 'upper' in label_corner:
+                y = y1
+                va = 'bottom'
+            elif 'lower' in label_corner:
+                y = y0
+                va = 'top'
+            else:
+                raise ValueError(label_corner)
+
+            if 'right' in label_corner:
+                x = x1
+                ha = 'right'
+            elif 'left' in label_corner:
+                x = x0
+                ha = 'left'
+            else:
+                raise ValueError(label_corner)
+
             self.ax.annotate(label,
-                             xy=(x0, y1),
-                             xytext=(0, 3),
+                             xy=(x, y),
+                             xytext=label_offset,
                              textcoords='offset points',
                              annotation_clip=False,
                              size=6, 
                              weight='bold',
+                             ha=ha,
+                             va=va,
                             )
 
     def draw_transcript(self, transcript):
@@ -452,9 +540,17 @@ class VariantDiagram:
             else:
                 exon_number = exon_i + 1
 
+            # Place label on corner farthest from variant.
+            if abs(start - self.variant.variant_genomic_1_p) < abs(end - self.variant.variant_genomic_1_p):
+                label_corner = 'upper right'
+            else:
+                label_corner = 'upper left'
+
             self.draw_rect(start - 0.5, end + 0.5, y - 0.5 * height, y + 0.5 * height,
                            0.5,
                            label=f'{gene} exon {exon_number}',
+                           label_offset=(0, 12),
+                           label_corner=label_corner,
                           )
     
         for start, end in intron_intervals_genomic:
@@ -488,23 +584,20 @@ class VariantDiagram:
             'text': 'black',
         }
 
-        letter = amino_acid['letter']
+        letter_to_draw = amino_acid['letter']
         weight = 'normal'
         
         for connected_block in amino_acid['connected_blocks']:
             position = amino_acid['position_1']
 
             if self.variant.variant_genomic_1_p in connected_block:
-                if isinstance(self.variant.effect, varcode.effects.Substitution):
+                if isinstance(self.variant.effect, (varcode.effects.Substitution, varcode.effects.PrematureStop)):
                     if self.variant.effect.aa_mutation_start_offset + 1 != position:
                         raise ValueError
                     if self.variant.effect.aa_ref != amino_acid['letter']:
                         raise ValueError
 
-                    new_letter = self.variant.effect.aa_alt
-
-                else:
-                    new_letter = amino_acid['letter']
+                    letter_to_draw = self.variant.effect.aa_alt
 
                 colors = {
                     'facecolor': 'tab:green',
@@ -512,8 +605,8 @@ class VariantDiagram:
                     'text': 'black',
                 }
 
-                if new_letter == '':
-                    new_letter = '*'
+                if letter_to_draw == '':
+                    letter_to_draw = '*'
 
                 weight = 'bold'
 
@@ -601,7 +694,7 @@ class VariantDiagram:
     
             self.ax.add_patch(patch)
 
-            self.ax.annotate(letter,
+            self.ax.annotate(letter_to_draw,
                              xy=((start + end) / 2, y),
                              xycoords='data',
                              alpha=1,
@@ -613,66 +706,121 @@ class VariantDiagram:
                              weight=weight,
                             )
 
+    def draw_rect_in_window_coords(self, x0, x1, y0, y1, **kwargs):
+        x0, x1 = sorted(map(self.variant.window_p_to_genomic_1_p, [x0, x1]))
+        x0 -= 0.5
+        x1 += 0.5
+
+        if self.variant.strand == '-':
+            y0 *= -1
+            y1 *= -1
+
+        self.draw_rect(x0, x1, y0, y1, **kwargs)
+
+    def annotate_in_window_coords(self, text, x, y, **kwargs):
+        x = self.variant.window_p_to_genomic_1_p(x)
+    
+        if self.variant.strand == '-':
+            y *= -1
+
+            if 'va' in kwargs:
+                kwargs['va'] = {
+                    'center': 'center',
+                    'top': 'bottom',
+                    'bottom': 'top',
+                }[kwargs['va']]
+
+            if 'ha' in kwargs:
+                kwargs['ha'] = {
+                    'center': 'center',
+                    'left': 'right',
+                    'right': 'left',
+                }[kwargs['ha']]
+
+            if 'xytext' in kwargs:
+                x_text, y_text = kwargs['xytext']
+                x_text *= -1
+                y_text *= -1
+                kwargs['xytext'] = (x_text, y_text)
+
+        self.ax.annotate(text,
+                            xy=(x, y),
+                            xycoords='data',
+                            annotation_clip=False,
+                            **kwargs,
+                        )
+
+    def draw_heatmap_row(self, data, y, height=0.5, heterozygous=False):
+        log_norm = matplotlib.colors.LogNorm(vmin=1e-1, vmax=100)
+
+        if self.variant.strand == '-':
+            y *= -1
+
+        if heterozygous:
+            v_min = 50
+        else:
+            v_min = 0
+
+        linear_norm = matplotlib.colors.Normalize(vmin=v_min, vmax=100)
+
+        for p, value in data[data > 0.05].items():
+            
+            if self.x_min <= p <= self.x_max:
+        
+                x0 = p - 0.5
+                x1 = p + 0.5
+                y0 = y - height / 2
+                y1 = y + height / 2
+
+                if p == self.variant.variant_genomic_1_p:
+                    cmap = effect_type_to_cmap['pathogenic']
+                    norm = linear_norm
+                else:
+                    window_p = self.variant.genomic_1_p_to_window_p(p)
+                    effect = self.variant.possible_bystander_effects.get(window_p)
+                    cmap = effect_to_cmap(effect)
+                    norm = log_norm
+
+                color = cmap(norm(value))
+                
+                patch = plt.Polygon([[x0, y0], [x0, y1], [x1, y1], [x1, y0]],
+                                    linewidth=0,
+                                    zorder=0,
+                                    color=color,
+                                    clip_on=False,
+                                )
+                self.ax.add_patch(patch)
+            
+                text_color = maximize_text_visibility(color)
+            
+                self.ax.annotate(f'{value: >4.1f}',
+                                    xy=(np.mean([x0, x1]), np.mean([y0, y1])),
+                                    ha='center',
+                                    va='center',
+                                    size=4,
+                                    color=text_color,
+                                    annotation_clip=False,
+                                    family='monospace',
+                                    )
+
     def draw_protospacer(self, PAM, y,
                          draw_As=True,
                          label_A_positions=True,
                          draw_editing_window=True,
+                         height=0.5,
                         ):
-        height = 0.5
 
         p = PAM['PAM_start']
 
-        to_g_1_p = self.variant.window_p_to_genomic_1_p
+        PAM_x0 = p
+        PAM_x1 = p + len(PAM['PAM']) - 1
+        PAM_y0 = y - height / 2
+        PAM_y1 = y + height / 2
 
-        def draw_rect_in_window_coords(x0, x1, y0, y1, **kwargs):
-            x0, x1 = sorted(map(to_g_1_p, [x0, x1]))
-            x0 -= 0.5
-            x1 += 0.5
-
-            if self.variant.strand == '-':
-                y0 *= -1
-                y1 *= -1
-
-            self.draw_rect(x0, x1, y0, y1, **kwargs)
-
-        def annotate_in_window_coords(text, x, y, **kwargs):
-            x = to_g_1_p(x)
-        
-            if self.variant.strand == '-':
-                y *= -1
-
-                if 'va' in kwargs:
-                    kwargs['va'] = {
-                        'center': 'center',
-                        'top': 'bottom',
-                        'bottom': 'top',
-                    }[kwargs['va']]
-
-                if 'ha' in kwargs:
-                    kwargs['ha'] = {
-                        'center': 'center',
-                        'left': 'right',
-                        'right': 'left',
-                    }[kwargs['ha']]
-
-                if 'xytext' in kwargs:
-                    x_text, y_text = kwargs['xytext']
-                    x_text *= -1
-                    y_text *= -1
-                    kwargs['xytext'] = (x_text, y_text)
-
-
-            self.ax.annotate(text,
-                             xy=(x, y),
-                             xycoords='data',
-                             annotation_clip=False,
-                             **kwargs,
-                            )
-
-        draw_rect_in_window_coords(p,
-                       p + len(PAM['PAM']) - 1,
-                       y - height / 2,
-                       y + height / 2,
+        self.draw_rect_in_window_coords(PAM_x0,
+                                   PAM_x1,
+                                   PAM_y0,
+                                   PAM_y1,
                        alpha=1,
                        fill=False,
                       )
@@ -682,7 +830,7 @@ class VariantDiagram:
         protospacer_y0 = y - height / 2
         protospacer_y1 = y + height / 2
 
-        draw_rect_in_window_coords(protospacer_x0,
+        self.draw_rect_in_window_coords(protospacer_x0,
                        protospacer_x1,
                        protospacer_y0,
                        protospacer_y1,
@@ -700,7 +848,7 @@ class VariantDiagram:
             optimal_x0 = p + min(optimal_offsets)
             optimal_x1 = p + max(optimal_offsets)
 
-            draw_rect_in_window_coords(optimal_x0,
+            self.draw_rect_in_window_coords(optimal_x0,
                         optimal_x1,
                         window_y0 + window_height,
                         window_y0 + 2 * window_height,
@@ -715,7 +863,7 @@ class VariantDiagram:
             bystander_x0 = p + min(bystander_offsets)
             bystander_x1 = p + max(bystander_offsets)
 
-            draw_rect_in_window_coords(bystander_x0,
+            self.draw_rect_in_window_coords(bystander_x0,
                         bystander_x1,
                         window_y0,
                         window_y0 + window_height,
@@ -725,7 +873,7 @@ class VariantDiagram:
                         )
 
         if draw_As:
-            annotate_in_window_coords('A',
+            self.annotate_in_window_coords('A',
                                     p + PAM['variant_offset_from_PAM'],
                                     y,
                                     color='tab:green',
@@ -738,21 +886,21 @@ class VariantDiagram:
 
         if label_A_positions:
             variant_position_in_protospacer = PAM['variant_position_in_protospacer']
-            annotate_in_window_coords(str(variant_position_in_protospacer),
-                                    p + PAM['variant_offset_from_PAM'],
-                                    y - height / 2,
-                                    xytext=(0, -1),
-                                    textcoords='offset points',
-                                    color='tab:green',
-                                    ha='center',
-                                    va='top',
-                                    fontname='DejaVu Sans',
-                                    size=6,
-                                    weight='bold',
-                                    )
+            self.annotate_in_window_coords(str(variant_position_in_protospacer),
+                                      p + PAM['variant_offset_from_PAM'],
+                                      y - height / 2,
+                                      xytext=(0, -2),
+                                      textcoords='offset points',
+                                      color='tab:green',
+                                      ha='center',
+                                      va='top',
+                                      fontname='DejaVu Sans',
+                                      size=6,
+                                      weight='bold',
+                                     )
 
         for p_offset, b in enumerate(PAM['editor'].PAM):
-            annotate_in_window_coords(b,
+            self.annotate_in_window_coords(b,
                                       p + p_offset,
                                       y,
                                       color='black',
@@ -767,7 +915,7 @@ class VariantDiagram:
             color = effect_to_color(effect['effect'])
 
             if draw_As:
-                annotate_in_window_coords('A',
+                self.annotate_in_window_coords('A',
                                         p + effect['bystander_offset_from_PAM'],
                                         y,
                                         color=color,
@@ -780,10 +928,10 @@ class VariantDiagram:
 
             if label_A_positions:
                 bystander_position_in_protospacer = effect['bystander_position_in_protospacer']
-                annotate_in_window_coords(str(bystander_position_in_protospacer),
+                self.annotate_in_window_coords(str(bystander_position_in_protospacer),
                                         p + effect['bystander_offset_from_PAM'],
                                         y - height / 2,
-                                        xytext=(0, -1),
+                                        xytext=(0, -2),
                                         textcoords='offset points',
                                         color=color,
                                         ha='center',
@@ -794,18 +942,18 @@ class VariantDiagram:
                                         )
 
         # Label editor
-        annotate_in_window_coords(PAM['editor'].deaminase.name,
-                                  protospacer_x0 - 0.5,
+        self.annotate_in_window_coords(PAM['editor'].deaminase.name,
+                                  PAM_x1 + 0.5,
                                   y,
-                                  xytext=(-3, 0),
+                                  xytext=(3, 0),
                                   textcoords='offset points',
-                                  ha='right',
+                                  ha='left',
                                   va='center',
                                   size=8,
                                  )
 
-    def draw_legend(self):
-        cumulative_offset = -5
+    def draw_legend(self, y=1):
+        cumulative_offset = 0
         
         for i, (label, color) in enumerate([
             ('Effects of possible A→G edits:', 'black'),
@@ -816,8 +964,8 @@ class VariantDiagram:
         ]):
             
             self.ax.annotate(label,
-                             xy=(0, 1),
-                             xycoords='axes fraction',
+                             xy=(0, y),
+                             xycoords=('axes fraction', 'data'),
                              xytext=(5, cumulative_offset),
                              textcoords='offset points',
                              ha='left',
@@ -828,36 +976,7 @@ class VariantDiagram:
 
             cumulative_offset -= 12
 
-    def plot(self, editor_keys,
-             draw_vertical_lines=True,
-             use_simple_label=False,
-            ):
-
-        self.draw_sequence()
-
-        self.draw_transcript(self.variant.MANE_transcript)
-
-        all_PAMs = []
-
-        for editor_key in editor_keys:
-            PAMs = self.variant.PAMs_with_variant_in_protospacer(editors[editor_key])
-            all_PAMs.extend(list(PAMs.values()))
-
-        all_PAMs = sorted(all_PAMs, key=lambda d: d['PAM_start'])
-
-        max_y = 0
-
-        for protospacer_i, PAM in enumerate(all_PAMs):
-            y = 2 + 1.75 * protospacer_i
-            self.draw_protospacer(PAM, y)
-
-            if self.variant.strand == '+':
-                max_y = max(y, max_y)
-
-        self.draw_legend()
-
-        self.ax.axis('off')
-
+    def draw_label(self, use_simple_label=False):
         if use_simple_label:
             label = self.variant.simple_label
             size = 10
@@ -867,15 +986,111 @@ class VariantDiagram:
             size = 8
             weight = 'normal'
 
+        if self.variant.strand == '+':
+            y = -2
+            va = 'top'
+
+        else:
+            y = 3
+            va = 'bottom'
+
         self.ax.annotate(label,
-                         xy=(self.variant.variant_genomic_1_p, max(3, max_y + 2)),
-                         xycoords='data',
+                         xy=(0.5, y),
+                         xycoords=('axes fraction', 'data'),
                          color='tab:green',
                          annotation_clip=False,
+                         va=va,
                          ha='center',
                          size=size,
                          weight=weight,
                         )
+
+    def draw_genomic_coordinates(self):
+        label = f'chr{self.variant.contig}\n{self.variant.variant_genomic_1_p:,}'
+
+        if self.variant.strand == '+':
+            xytext = (0, -20)
+            va = 'top'
+
+        else:
+            xytext = (0, 40)
+            va = 'bottom'
+
+        self.ax.annotate(label,
+                         xy=(self.variant.variant_genomic_1_p, 0),
+                         xycoords='data',
+                         xytext=xytext,
+                         textcoords='offset points',
+                         ha='center',
+                         va=va,
+                         annotation_clip=False,
+                         size=8,
+                         weight='bold',
+                        )
+
+    def draw_vertical_lines(self, y_max=10):
+        y_min = -0.5
+
+        if self.variant.strand == '-':
+            y_min, y_max = -y_max, -y_min
+
+        for x in range(self.x_min, self.x_max + 2):
+            self.ax.plot([x - 0.5, x - 0.5],
+                         [y_min, y_max],
+                         color='black',
+                         alpha=0.05,
+                         clip_on=False,
+                         zorder=0,
+                        )
+
+    def plot(self,
+             editors,
+             draw_vertical_lines=True,
+             draw_label=True,
+             use_simple_label=False,
+             only_usable_PAMs=True,
+            ):
+
+        self.draw_sequence()
+
+        self.draw_transcript(self.variant.MANE_transcript)
+
+        all_PAMs = []
+
+        for editor in editors:
+            if only_usable_PAMs:
+                PAMs = self.variant.usable_PAMs(editor)
+            else:
+                PAMs = self.variant.PAMs_with_variant_in_protospacer(editor)
+
+            all_PAMs.extend(list(PAMs.values()))
+
+        all_PAMs = sorted(all_PAMs, key=lambda d: d['PAM_start'])
+
+        max_y = 0
+
+        if self.variant.strand == '+':
+            initial_gap = 3
+        else:
+            initial_gap = 1.5
+
+        for protospacer_i, PAM in enumerate(all_PAMs):
+            y = initial_gap + 1.5 * protospacer_i
+            self.draw_protospacer(PAM, y)
+
+            max_y = max(y, max_y)
+
+        if self.variant.strand == '+':
+            legend_y = -1
+        else:
+            legend_y = 4
+
+        self.draw_legend(y=legend_y)
+
+        self.ax.axis('off')
+
+        if draw_label:
+            self.draw_label(use_simple_label=use_simple_label)
 
         self.ax.annotate('···',
                         xy=(self.x_min, 0),
@@ -899,33 +1114,11 @@ class VariantDiagram:
                         size=18,
                        )
 
-        self.ax.annotate(f'chr{self.variant.contig}\n{self.x_min:,}',
-                         xy=(self.x_min, 0),
-                         xycoords='data',
-                         xytext=(0, -25),
-                         textcoords='offset points',
-                         ha='center',
-                         va='top',
-                         annotation_clip=False,
-                         size=8,
-                         weight='bold',
-                        )
-
         if draw_vertical_lines:
-            self.draw_vertical_lines()
+            self.draw_vertical_lines(max_y)
 
+        self.draw_genomic_coordinates()
 
-    def draw_vertical_lines(self, y_min=-20, y_max=10):
-        for x in range(self.x_min, self.x_max + 2):
-            self.ax.plot([x - 0.5, x - 0.5],
-                         [y_min, y_max],
-                         color='black',
-                         alpha=0.05,
-                         clip_on=False,
-                         zorder=0,
-                        )
-
-                                 
 def extract_amino_acids(transcript):
     def connected_blocks(ps):
         blocks = []
