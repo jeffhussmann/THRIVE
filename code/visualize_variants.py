@@ -1115,7 +1115,7 @@ class VariantDiagram:
                        )
 
         if draw_vertical_lines:
-            self.draw_vertical_lines(max_y)
+            self.draw_vertical_lines(max_y + 1)
 
         self.draw_genomic_coordinates()
 

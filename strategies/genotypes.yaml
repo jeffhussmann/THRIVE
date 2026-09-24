@@ -1,0 +1,23 @@
+NC_000003.12:g.48574262C>T:
+  genome: hg38
+  variants:
+    - NC_000003.12:g.48574262C>T
+
+NC_000003.12:g.48566912G>A:
+  genome: hg38
+  variants:
+    - NC_000003.12:g.48566912G>A
+
+SPAST_lenti:
+  genome: SPAST_plasmid_lenti
+  variant_flanking_regions:
+    - NC_000002.12:g.32141906G>A
+
+SCN2A_SYT1_KJ_Lentivirus_Plasmid:
+  genome: SCN2A_SYT1_KJ_Lentivirus_Plasmid
+  variant_flanking_regions:
+    - NC_000012.12:g.79448958T>C
+    - NC_000002.12:g.210591886C>T
+    - NC_000002.12:g.165389451G>A
+    - NC_000002.12:g.165342465G>A
+
