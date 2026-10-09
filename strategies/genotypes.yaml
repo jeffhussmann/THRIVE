@@ -8,6 +8,16 @@ NC_000003.12:g.48566912G>A:
   variants:
     - NC_000003.12:g.48566912G>A
 
+NueSKIN06:
+  genome: hg38
+  variants:
+    - NC_000003.12:g.48578354G>A
+
+COL7A1 c.4894C>T:
+  genome: hg38
+  variants:
+    - NC_000003.12:g.48581265G>A
+
 SPAST_lenti:
   genome: SPAST_plasmid_lenti
   variant_flanking_regions:
@@ -20,4 +30,23 @@ SCN2A_SYT1_KJ_Lentivirus_Plasmid:
     - NC_000002.12:g.210591886C>T
     - NC_000002.12:g.165389451G>A
     - NC_000002.12:g.165342465G>A
+
+ASS1_target_mice:
+  genome: ASS1_target
+  variant_flanking_regions:
+    - NC_000009.12:g.130480447G>A
+    - NC_000009.12:g.130489464G>A
+    - NC_000002.12:g.210591886C>T
+
+IEI-021:
+  genome: hg38
+  variants:
+    - NC_000023.11:g.101359324C>T
+
+IEI-023:
+  genome: hg38
+  variants:
+    - NC_000020.11:g.44626498A>G
+    - NC_000020.11:g.44623053C>T
+
 
