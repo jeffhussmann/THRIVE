@@ -1,0 +1,10 @@
+extracted_target_region:
+  genome: hg38
+  ref_name: chr20
+  target_end: 44620715
+  target_start: 44619981
+primers:
+- ADA_ex11_NGS_F
+- ADA_ex11_NGS_R
+target: target
+variant_flanking_regions: {}

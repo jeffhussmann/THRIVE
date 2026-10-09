@@ -1,0 +1,31 @@
+extracted_target_region:
+  genome: ASS1_target
+  ref_name: ASS1_target
+  target_end: 4227
+  target_start: 3524
+primers:
+- Hipp11_NGS_cassette_F1
+- Hipp11_NGS_cassette_R1
+target: target
+variant_flanking_regions:
+  NC_000002.12:g.210591886C>T:
+    genomic_1_end: 210591937
+    genomic_1_start: 210591835
+    ref_name: chr2
+    strand: +
+    target_end: 501
+    target_start: 399
+  NC_000009.12:g.130480447G>A:
+    genomic_1_end: 130480498
+    genomic_1_start: 130480397
+    ref_name: chr9
+    strand: +
+    target_end: 301
+    target_start: 200
+  NC_000009.12:g.130489464G>A:
+    genomic_1_end: 130489516
+    genomic_1_start: 130489415
+    ref_name: chr9
+    strand: +
+    target_end: 401
+    target_start: 300

@@ -1,0 +1,33 @@
+LOCUS       target                   906 bp    DNA              UNK 01-JAN-1980
+DEFINITION  .
+ACCESSION   <unknown id>
+VERSION     <unknown id>
+KEYWORDS    .
+SOURCE      .
+  ORGANISM  .
+            .
+FEATURES             Location/Qualifiers
+     misc_feature    201..220
+                     /label="FWD_LENTI_ASS1_NGS"
+                     /ApEinfo_fwdcolor="#75C6A9"
+     misc_feature    complement(687..706)
+                     /label="FRAGMID_LENTI_REV"
+                     /ApEinfo_fwdcolor="#75C6A9"
+ORIGIN
+        1 cattcgatta gtgaacggat cggcactgcg tgcgccaatt ctgcagacaa atggcagtat
+       61 tcatccacaa ttttaaaaga aaagggggga ttggggggta cagtgcaggg gaaagaatag
+      121 tagacataat agcaacagac atacaaacta aagaattaca aaaacaaatt acaaaaattc
+      181 aaaattttcg ggtttattac agggacagca gagatccagt ttggttaatt aaggtaccgg
+      241 gcagaggaac ttggtttggc aaatgtggaa ggattgtcag ttctccgatc attccagctg
+      301 gtaaattaac tgggagtgtt cataaaatgt actttgtaat taatttttgg gtgagagtgg
+      361 agagatggat gcccttcgaa tacagatgga agagcaattc atggcatcaa acccctccaa
+      421 agtctcttat gagcccatta cgacccttct ttcagaaagt gcaggtggtg gtaactgttt
+      481 tggactatga caagactggc aagaacgatg ccatcggcaa agtctttgtg ggctacaaca
+      541 gcaccagaat cagcctgttt tgaatatcac aaacaaacag gctttcatta ctgcttagaa
+      601 tcatggctat gccttggaca acaccctccc tgctggctgg aaaccacacg gctccggtgc
+      661 ccgtcagtgg gcagagcgca catcgcccac agtccccgag aagttggggg gaggggtcgg
+      721 caattgatcc ggtgcctaga gaaggtggcg cggggtaaac tgggaaagtg atgtcgtgta
+      781 ctggctccgc ctttttcccg agggtggggg agaaccgtat ataagtgcag tagtcgccgt
+      841 gaacgttctt tttcgcaacg ggtttgccgc cagaacacag gtaagtgccg tgtgtggttc
+      901 ccgcgg
+//

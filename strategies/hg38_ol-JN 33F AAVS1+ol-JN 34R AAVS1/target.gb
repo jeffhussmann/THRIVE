@@ -1,0 +1,28 @@
+LOCUS       target                   641 bp    DNA              UNK 01-JAN-1980
+DEFINITION  .
+ACCESSION   <unknown id>
+VERSION     <unknown id>
+KEYWORDS    .
+SOURCE      .
+  ORGANISM  .
+            .
+FEATURES             Location/Qualifiers
+     misc_feature    201..225
+                     /label="ol-JN 33F AAVS1"
+                     /ApEinfo_fwdcolor="#75C6A9"
+     misc_feature    complement(422..441)
+                     /label="ol-JN 34R AAVS1"
+                     /ApEinfo_fwdcolor="#75C6A9"
+ORIGIN
+        1 cagacggccg cgtcagagca gctcaggttc tgggagaggg tagcgcaggg tggccactga
+       61 gaaccgggca ggtcacgcat cccccccttc cctcccaccc cctgccaagc tctccctccc
+      121 aggatcctct ctggctccat cgtaagcaaa ccttagaggt tctggcaagg agagagatgg
+      181 ctccaggaaa tgggggtgtg tcaccagata aggaatctgc ctaacaggag gtgggggtta
+      241 gacccaatat caggagacta ggaaggagga ggcctaagga tggggctttt ctgtcaccaa
+      301 tcctgtccct agtggcccca ctgtggggtg gaggggacag ataaaagtac ccagaaccag
+      361 agccacatta accggccctg ggaatataag gtggtcccag ctcggggaca caggatccct
+      421 ggaggcagca aacatgctgt cctgaagtgg acataggggc ccgggttgga ggaagaagac
+      481 tagctgagct ctcggacccc tggaagatgc catgacaggg ggctggaaga gctagcacag
+      541 actagagagg taaggggggt aggggagctg cccaaatgaa aggagtgaga ggtgacccga
+      601 atccacagga gaacggggtg tccaggcaaa gaaagcaaga g
+//

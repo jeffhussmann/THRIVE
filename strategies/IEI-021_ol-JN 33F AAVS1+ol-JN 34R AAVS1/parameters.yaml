@@ -1,0 +1,12 @@
+extracted_target_region:
+  genome: hg38
+  ref_name: chr19
+  target_end: 55116093
+  target_start: 55115452
+  variants:
+  - NC_000023.11:g.101359324C>T
+primers:
+- ol-JN 33F AAVS1
+- ol-JN 34R AAVS1
+target: target
+variant_flanking_regions: {}

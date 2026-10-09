@@ -1,0 +1,11 @@
+extracted_target_region:
+  genome: hg38
+  ref_name: chr3
+  target_end: 48567265
+  target_start: 48566420
+  variants:
+  - NC_000003.12:g.48566912G>A
+primers:
+- COL7A1_ex111_112_F_NGS
+- COL7A1_ex111_112_R_NGS
+target: target

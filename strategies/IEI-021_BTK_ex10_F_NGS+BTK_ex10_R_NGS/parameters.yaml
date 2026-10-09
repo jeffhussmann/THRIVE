@@ -1,0 +1,12 @@
+extracted_target_region:
+  genome: hg38
+  ref_name: chrX
+  target_end: 101359632
+  target_start: 101358976
+  variants:
+  - NC_000023.11:g.101359324C>T
+primers:
+- BTK_ex10_F_NGS
+- BTK_ex10_R_NGS
+target: target
+variant_flanking_regions: {}

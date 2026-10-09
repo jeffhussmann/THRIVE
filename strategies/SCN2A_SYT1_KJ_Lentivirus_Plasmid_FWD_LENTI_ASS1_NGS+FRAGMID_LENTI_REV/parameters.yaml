@@ -1,0 +1,38 @@
+extracted_target_region:
+  genome: SCN2A_SYT1_KJ_Lentivirus_Plasmid
+  ref_name: SCN2A_SYT1_KJ_Lentivirus_Plasmid
+  target_end: 3275
+  target_start: 2369
+primers:
+- FWD_LENTI_ASS1_NGS
+- FRAGMID_LENTI_REV
+target: target
+variant_flanking_regions:
+  NC_000002.12:g.165342465G>A:
+    genomic_1_end: 165342515
+    genomic_1_start: 165342415
+    ref_name: chr2
+    strand: +
+    target_end: 345
+    target_start: 245
+  NC_000002.12:g.165389451G>A:
+    genomic_1_end: 165389501
+    genomic_1_start: 165389400
+    ref_name: chr2
+    strand: +
+    target_end: 445
+    target_start: 344
+  NC_000002.12:g.210591886C>T:
+    genomic_1_end: 210591938
+    genomic_1_start: 210591835
+    ref_name: chr2
+    strand: +
+    target_end: 647
+    target_start: 544
+  NC_000012.12:g.79448958T>C:
+    genomic_1_end: 79449008
+    genomic_1_start: 79448908
+    ref_name: chr12
+    strand: +
+    target_end: 545
+    target_start: 445

@@ -1,0 +1,17 @@
+extracted_target_region:
+  genome: SPAST_plasmid_lenti
+  ref_name: SPAST_plasmid_lenti
+  target_end: 3149
+  target_start: 2343
+primers:
+- FWD_LENTI_ASS1_NGS
+- FRAGMID_LENTI_REV
+target: target
+variant_flanking_regions:
+  NC_000002.12:g.32141906G>A:
+    genomic_1_end: 32141957
+    genomic_1_start: 32141856
+    ref_name: chr2
+    strand: +
+    target_end: 346
+    target_start: 245
