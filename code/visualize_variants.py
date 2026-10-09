@@ -1,5 +1,6 @@
 import logging
 
+import bokeh.palettes
 import Bio.SeqUtils
 import hgvs.easy
 import matplotlib.colors
@@ -12,6 +13,8 @@ import varcode
 
 import hits.genomes
 import hits.utilities
+
+memoized_property = hits.utilities.memoized_property
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,23 @@ def get_MANE_row(gene_name):
     MANE_row = rows.iloc[0]
 
     return MANE_row
+
+def simple_name_to_hgvs(simple_name):
+    gene_name, change, *rest = simple_name.split()
+    change = change.strip(',')
+
+    MANE_row = get_MANE_row(gene_name)
+
+    RefSeq_nuc = MANE_row['RefSeq_nuc']
+    Ensembl_nuc = MANE_row['Ensembl_nuc'].split('.')[0]
+
+    var_c = hgvs.easy.parse(f'{RefSeq_nuc}:{change}')
+    
+    var_g = hgvs.easy.c_to_g(var_c)
+    
+    var_g.validate()
+
+    return var_g, var_c
 
 def maximize_text_visibility(color):
     # Taken directly from seaborn's approach to annot in heatmaps.
@@ -90,19 +110,18 @@ class Editor:
         self.deaminase = AdenineDeaminase(deaminase_name, **specs)
         self.PAM = PAM
         
-        self.name = f'{self.deaminase.name} ({self.PAM})'
+        self.name = f'{self.deaminase.name}-{self.PAM}'
 
-class ABEVariant:
-    def __init__(self, var_g, gene_name):
+class BaseEditableVariant:
+    def __init__(self, var_g, gene_name=None, install=False):
         if isinstance(var_g, str):
             var_g = hgvs.easy.parse(var_g)
 
-        MANE_row = get_MANE_row(gene_name)
-
-        self.refseq_nuc = MANE_row['RefSeq_nuc']
-        self.ensembl_nuc = MANE_row['Ensembl_nuc'].split('.')[0]
-
         self.var_g = var_g
+
+        self.gene_name = gene_name
+
+        self.install = install
 
         self.contig = str(int(self.var_g.ac.split('.')[0].split('_')[-1]))
         if self.contig == '23':
@@ -115,22 +134,54 @@ class ABEVariant:
         
         self.variant = varcode.Variant(self.contig, self.variant_genomic_1_p, ref, alt)
 
-        self.effect = self.get_effect(self.variant)
-
         edit = str(self.var_g.posedit.edit)
 
-        if edit == 'G>A':
-            self.strand = '+'
-            window_before = 15
-            window_after = 25
+        if not self.install:
+            if edit == 'G>A':
+                self.strand = '+'
+                self.type = 'ABE'
 
-        elif edit == 'C>T':
-            self.strand = '-'
-            window_before = 25
-            window_after = 15
+            elif edit == 'C>T':
+                self.strand = '-'
+                self.type = 'ABE'
+
+            elif edit == 'T>C':
+                self.strand = '+'
+                self.type = 'CBE'
+
+            elif edit == 'A>G':
+                self.strand = '-'
+                self.type = 'CBE'
+
+            else:
+                raise ValueError(edit)
 
         else:
-            raise ValueError(edit)
+            if edit == 'G>A':
+                self.strand = '-'
+                self.type = 'CBE'
+
+            elif edit == 'C>T':
+                self.strand = '+'
+                self.type = 'CBE'
+
+            elif edit == 'T>C':
+                self.strand = '-'
+                self.type = 'ABE'
+
+            elif edit == 'A>G':
+                self.strand = '+'
+                self.type = 'ABE'
+
+            else:
+                raise ValueError(edit)
+
+        if self.strand == '+':
+            window_before = 15
+            window_after = 25
+        else:
+            window_before = 25
+            window_after = 15
 
         self.other_strand = {'+': '-', '-': '+'}[self.strand]
 
@@ -140,7 +191,12 @@ class ABEVariant:
         window_end = self.variant_genomic_1_p - 1 + window_after + 1
         window_sequence = genomic_sequence_fetcher(f'chr{self.contig}', window_start, window_end).upper()
 
-        self.target_strand_window_sequence = window_sequence[:window_before] + self.var_g.posedit.edit.alt + window_sequence[window_before + 1:]
+        # If a correction, switch to the alt. If an install, don't.
+
+        if self.install:
+            self.target_strand_window_sequence = window_sequence
+        else:
+            self.target_strand_window_sequence = window_sequence[:window_before] + self.var_g.posedit.edit.alt + window_sequence[window_before + 1:]
 
         if self.strand == '+':
             self.variant_p_in_window = window_before
@@ -155,6 +211,22 @@ class ABEVariant:
         effect = effects.top_priority_effect_per_transcript_id()[self.ensembl_nuc]
 
         return effect
+
+    @memoized_property
+    def effect(self):
+        return self.get_effect(self.variant)
+
+    @memoized_property
+    def MANE_row(self):
+        return get_MANE_row(self.gene_name)
+
+    @memoized_property
+    def refseq_nuc(self):
+        return self.MANE_row['RefSeq_nuc']
+
+    @memoized_property
+    def ensembl_nuc(self):
+        return self.MANE_row['Ensembl_nuc'].split('.')[0]
 
     def window_p_to_genomic_1_p(self, window_p):
         if self.strand == '+':
@@ -289,7 +361,7 @@ class ABEVariant:
             else:
                 PAM_start = feature.end
             
-            PAM_start += editing_strategy.parameters['extracted_target_region']['target_start'] + 1
+            PAM_start += editing_strategy.offset_for_genomic_1(self.var_g)
     
             PAM_start_window_p = self.genomic_1_p_to_window_p(PAM_start)
 
@@ -315,24 +387,39 @@ class ABEVariant:
         return len(self.usable_PAMs(editor)) > 0
 
 effect_type_to_color = {
-    varcode.effects.Silent: 'orange',
-    varcode.effects.Substitution: 'red',
-    type(None): 'grey', # represents non-A
-    'other': 'purple',
-    'pathogenic': 'green',
+    (varcode.effects.Silent, False): 'orange',
+    (varcode.effects.Silent, True): bokeh.palettes.Colorblind8[1],
+
+    (varcode.effects.Substitution, False): 'red',
+    (varcode.effects.Substitution, True): bokeh.palettes.Colorblind8[5],
+
+    (type(None), False): 'grey', # represents non-A
+    (type(None), True): 'grey', # represents non-A
+
+    ('other', False): 'purple',
+    ('other', True): bokeh.palettes.Colorblind8[0],
+
+    ('pathogenic', False): 'green',
+    ('pathogenic', True): bokeh.palettes.Colorblind8[3],
 }
 
 effect_type_to_cmap = {}
-for effect_type, color in effect_type_to_color.items():
-    cmap_name = f'{color[0].upper()}{color[1:]}s'
-    cmap = plt.get_cmap(cmap_name)
-    effect_type_to_cmap[effect_type] = cmap
 
-def effect_to_color(effect):
-    return effect_type_to_color.get(type(effect), effect_type_to_color['other'])
+for (effect_type, colorblind), color in effect_type_to_color.items():
+    if colorblind:
+        cmap = matplotlib.colors.LinearSegmentedColormap.from_list(f'{effect_type}_cmap', ['white', color])
+        effect_type_to_cmap[effect_type, True] = cmap
+    else:
+        cmap_name = f'{color[0].upper()}{color[1:]}s'
+        cmap = plt.get_cmap(cmap_name)
 
-def effect_to_cmap(effect):
-    return effect_type_to_cmap.get(type(effect), effect_type_to_cmap['other'])
+    effect_type_to_cmap[effect_type, colorblind] = cmap
+
+def effect_to_color(effect, colorblind=False):
+    return effect_type_to_color.get((type(effect), colorblind), effect_type_to_color['other', colorblind])
+
+def effect_to_cmap(effect, colorblind=False):
+    return effect_type_to_cmap.get((type(effect), colorblind), effect_type_to_cmap['other', colorblind])
 
 def PAM_is_usable(PAM):
     def is_unacceptable(effect):
@@ -346,8 +433,10 @@ class VariantDiagram:
 
     transcript_y = 0.8
     
-    def __init__(self, variant):
+    def __init__(self, variant, colorblind=False):
         self.variant = variant
+
+        self.colorblind = colorblind
 
         min_window_p = 0
         max_window_p = len(self.variant.target_strand_window_sequence) - 1
@@ -369,7 +458,7 @@ class VariantDiagram:
             elif window_p in self.variant.possible_bystander_effects:
                 effect = self.variant.possible_bystander_effects[window_p]
 
-                color = effect_to_color(effect)
+                color = effect_to_color(effect, colorblind=self.colorblind)
 
                 weight = 'bold'
                 other_weight = 'normal'
@@ -750,8 +839,19 @@ class VariantDiagram:
                             **kwargs,
                         )
 
-    def draw_heatmap_row(self, data, y, height=0.5, heterozygous=False):
-        log_norm = matplotlib.colors.LogNorm(vmin=1e-1, vmax=100)
+    def draw_heatmap_row(self,
+                         data,
+                         y,
+                         height=0.6,
+                         heterozygous=False,
+                         min_value_to_label=0.1,
+                         use_log_for_bystanders=True,
+                        ):
+
+        if use_log_for_bystanders:
+            bystander_norm = matplotlib.colors.LogNorm(vmin=1e-1, vmax=100)
+        else:
+            bystander_norm = matplotlib.colors.Normalize(vmin=0, vmax=100)
 
         if self.variant.strand == '-':
             y *= -1
@@ -773,13 +873,13 @@ class VariantDiagram:
                 y1 = y + height / 2
 
                 if p == self.variant.variant_genomic_1_p:
-                    cmap = effect_type_to_cmap['pathogenic']
+                    cmap = effect_type_to_cmap['pathogenic', self.colorblind]
                     norm = linear_norm
                 else:
                     window_p = self.variant.genomic_1_p_to_window_p(p)
                     effect = self.variant.possible_bystander_effects.get(window_p)
-                    cmap = effect_to_cmap(effect)
-                    norm = log_norm
+                    cmap = effect_to_cmap(effect, colorblind=self.colorblind)
+                    norm = bystander_norm
 
                 color = cmap(norm(value))
                 
@@ -793,21 +893,23 @@ class VariantDiagram:
             
                 text_color = maximize_text_visibility(color)
             
-                self.ax.annotate(f'{value: >4.1f}',
-                                    xy=(np.mean([x0, x1]), np.mean([y0, y1])),
-                                    ha='center',
-                                    va='center',
-                                    size=4,
-                                    color=text_color,
-                                    annotation_clip=False,
-                                    family='monospace',
-                                    )
+                if value >= min_value_to_label:
+                    self.ax.annotate(f'{value: >4.1f}',
+                                        xy=(np.mean([x0, x1]), np.mean([y0, y1])),
+                                        ha='center',
+                                        va='center',
+                                        size=4,
+                                        color=text_color,
+                                        annotation_clip=False,
+                                        family='monospace',
+                                        )
 
     def draw_protospacer(self, PAM, y,
                          draw_As=True,
                          label_A_positions=True,
                          draw_editing_window=True,
                          height=0.5,
+                         editor_color='black',
                         ):
 
         p = PAM['PAM_start']
@@ -901,18 +1003,24 @@ class VariantDiagram:
 
         for p_offset, b in enumerate(PAM['editor'].PAM):
             self.annotate_in_window_coords(b,
-                                      p + p_offset,
-                                      y,
-                                      color='black',
-                                      ha='center',
-                                      va='center',
-                                      fontname='DejaVu Sans',
-                                      size=8,
-                                      weight='normal',
-                                     )
+                                           p + p_offset,
+                                           y,
+                                           color='black',
+                                           ha='center',
+                                           va='center',
+                                           fontname='DejaVu Sans',
+                                           size=8,
+                                           weight='normal',
+                                           bbox=dict(
+                                               boxstyle='square,pad=0.1',
+                                               fc='white',
+                                               ec='white',
+                                               lw=0,
+                                           ),
+                                          )
 
         for effect in PAM['bystander_effects']:
-            color = effect_to_color(effect['effect'])
+            color = effect_to_color(effect['effect'], colorblind=self.colorblind)
 
             if draw_As:
                 self.annotate_in_window_coords('A',
@@ -950,6 +1058,13 @@ class VariantDiagram:
                                   ha='left',
                                   va='center',
                                   size=8,
+                                  color=editor_color,
+                                  bbox=dict(boxstyle='square,pad=0',
+                                            fc='white',
+                                            ec='white',
+                                            lw=0,
+                                           ),
+                                  zorder=5,
                                  )
 
     def draw_legend(self, y=1):
@@ -957,10 +1072,10 @@ class VariantDiagram:
         
         for i, (label, color) in enumerate([
             ('Effects of possible A→G edits:', 'black'),
-            ('correction of pathogenic variant', 'tab:green'),
-            ('synonymous', 'orange'),
-            ('nonsynonymous', 'red'),
-            ('intronic/other', 'purple'),
+            (f'{'installation' if self.variant.install else 'correction'} of pathogenic variant', effect_type_to_color['pathogenic', self.colorblind]),
+            ('synonymous', effect_type_to_color[varcode.effects.Silent, self.colorblind]),
+            ('nonsynonymous', effect_type_to_color[varcode.effects.Substitution, self.colorblind]),
+            ('intronic/other', effect_type_to_color['other', self.colorblind]),
         ]):
             
             self.ax.annotate(label,
@@ -1076,14 +1191,14 @@ class VariantDiagram:
 
         for protospacer_i, PAM in enumerate(all_PAMs):
             y = initial_gap + 1.5 * protospacer_i
-            self.draw_protospacer(PAM, y)
+            self.draw_protospacer(PAM, y, height=0.6)
 
             max_y = max(y, max_y)
 
         if self.variant.strand == '+':
             legend_y = -1
         else:
-            legend_y = 4
+            legend_y = 5
 
         self.draw_legend(y=legend_y)
 

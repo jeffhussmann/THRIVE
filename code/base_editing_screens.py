@@ -17,34 +17,48 @@ memoized_property = hits.utilities.memoized_property
 class Screen:
     def __init__(self,
                  base_dir,
-                 batch_name,
+                 batch_names,
                  var_g,
                  variant_primers,
-                 positive_control_variant,
-                 positive_control_primers,
                  gene,
                  heterozygous=False,
+                 install=False,
+                 specific_unedited_variant=None,
                 ):
 
         self.base_dir = base_dir
-        self.batch_name = batch_name
+
+        if isinstance(batch_names, str):
+            batch_names = [batch_names]
+
+        self.batch_names = batch_names
+
+        self.var_g = var_g
 
         self.gene = gene
 
         self.heterozygous = heterozygous
 
-        sample_sheet = knock_knock.experiment.load_sample_sheet(base_dir, batch_name)
+        self.install = install
 
-        self.sample_sheet = pd.DataFrame(sample_sheet).T
-        self.sample_sheet.index.name = 'sample_name'
+        self.specific_unedited_variant = specific_unedited_variant
 
-        self.variant = visualize_variants.BaseEditableVariant(var_g, gene)
+        sample_sheets = {}
+
+        for batch_name in batch_names:
+            sample_sheet = pd.DataFrame(knock_knock.experiment.load_sample_sheet(base_dir, batch_name)).T
+            sample_sheet.index.name = 'sample_name'
+
+            sample_sheets[batch_name] = sample_sheet
+
+        self.sample_sheet = pd.concat(sample_sheets, names=['batch_name'])
+
+        self.variant = visualize_variants.BaseEditableVariant(var_g, gene, install=self.install)
         self.variant_primers = variant_primers
-        self.positive_control_variant = positive_control_variant
-        self.positive_control_primers = positive_control_primers
 
-        def sample_name_to_PAM(sample_name):
-            exp = self.exps[self.batch_name, sample_name]
+        def sample_name_to_PAM(batch_and_sample_name):
+            batch_name, sample_name = batch_and_sample_name
+            exp = self.exps[batch_name, sample_name]
             return knock_knock.effector.effectors[exp.editing_strategy.manual_effector].PAM_pattern
 
         self.sample_sheet['PAM'] = self.sample_sheet.index.map(sample_name_to_PAM)
@@ -52,43 +66,69 @@ class Screen:
 
     @memoized_property
     def exps(self):
-        return knock_knock.experiment.get_all_experiments(self.base_dir, conditions={'batch': [self.batch_name]})
+        return knock_knock.experiment.get_all_experiments(self.base_dir, conditions={'batch': self.batch_names})
 
-    def fractions(self, variant, relevant_primers):
-        relevant_rows = self.sample_sheet.query('primers == @relevant_primers')
+    @memoized_property
+    def fractions(self):
+        relevant_rows = self.sample_sheet.query('primers == @self.variant_primers')
 
-        exp = self.exps[self.batch_name, relevant_rows.index[0]]
+        if self.specific_unedited_variant is not None:
+            relevant_rows = relevant_rows.query('`condition:variant` == @self.var_g or `condition:variant` == @self.specific_unedited_variant')
 
-        posedit = variant.var_g.posedit
+        exp = self.exps[relevant_rows.index[0]]
 
-        variant_p = variant.variant_genomic_1_p - exp.editing_strategy.offset_for_genomic_1(variant.var_g)
+        posedit = self.variant.var_g.posedit
 
-        window = hits.interval.Interval(variant_p - 10, variant_p + 10)
-        precise_details = knock_knock.outcome.Details(mismatches=[knock_knock.outcome.Mismatch(variant_p, posedit.edit.ref)])
+        variant_p = self.variant.variant_genomic_1_p - exp.editing_strategy.offset_for_genomic_1(self.variant.var_g)
+
+        window = hits.interval.Interval(variant_p - 9, variant_p + 10)
+
+        if self.install:
+            edited_base = posedit.edit.alt
+        else:
+            edited_base = posedit.edit.ref
+
+        mismatch = knock_knock.outcome.Mismatch(variant_p, edited_base)
+        precise_details = knock_knock.outcome.Details(mismatches=[mismatch])
 
         data = {}
 
-        for sample_name, row in relevant_rows.iterrows():
-            exp = self.exps[self.batch_name, sample_name]
+        for (batch_name, sample_name), row in relevant_rows.iterrows():
+            exp = self.exps[batch_name, sample_name]
             outcome_fractions = knock_knock.outcome.marginalize_over_mismatches_outside_window(exp.outcome_fractions(), window)
 
             precise_f = outcome_fractions.get(('wild type', 'mismatches', str(precise_details)), 0)
 
             imprecise_f = outcome_fractions.get(('wild type', 'mismatches'), pd.Series()).sum() - precise_f
 
-            data[sample_name] = {
+            contain_corrective = []
+
+            for c, s, d in outcome_fractions.index:
+                if c == 'wild type' and s == 'mismatches':
+                    mismatches = knock_knock.outcome.Details.from_string(d)['mismatches'].mismatches
+                    if mismatch in mismatches:
+                        contain_corrective.append((c, s, d))
+
+            contain_corrective_f = outcome_fractions.loc[contain_corrective].sum()
+            
+            data[batch_name, sample_name] = {
                 'precise': precise_f * 100,
                 'imprecise': imprecise_f * 100,
-                'unedited': row['condition:variant'] != str(variant.var_g)
+                'contains_corrective': contain_corrective_f * 100,
+                'unedited': row['condition:variant'] != str(self.variant.var_g),
+                'read_count': exp.outcome_counts().sum(),
             }
 
-            data[sample_name].update(**row)
+            if self.specific_unedited_variant is not None:
+                data[batch_name, sample_name]['unedited'] = row['condition:variant'] == self.specific_unedited_variant
+
+            data[batch_name, sample_name].update(**row)
 
         df = pd.DataFrame(data).T
 
         df['total_modified'] = df['precise'] + df['imprecise']
 
-        df.index.name = 'sample_name'
+        df.index.names = ['batch_name', 'sample_name']
         df = df.reset_index().sort_values(['unedited', 'sgRNAs'])
 
         return df
@@ -125,7 +165,7 @@ class Screen:
         return editor_to_color
 
     def plot(self, plot_total_modified=False):
-        to_plot = self.fractions(self.variant, self.variant_primers)
+        to_plot = self.fractions
 
         num_groups = to_plot.query('unedited == False').groupby(['sgRNAs', 'condition:editor']).ngroups + 1
 
@@ -175,7 +215,7 @@ class Screen:
                     for ax, quantity in zip(axs, quantities_to_plot):
                 
                         mean = editor_rows[quantity].mean()
-                        sem = editor_rows[quantity].sem()
+                        stds = editor_rows[quantity].std()
 
                         if unedited:
                             marker, size = 'o', 5
@@ -191,7 +231,7 @@ class Screen:
                                 clip_on=False,
                             )
                     
-                        ax.plot([mean - sem, mean + sem], [y, y],
+                        ax.plot([mean - stds, mean + stds], [y, y],
                                 linestyle='-',
                                 linewidth=1.5,
                                 color=color,
@@ -310,7 +350,7 @@ class Screen:
                 editors_to_highlight=None,
                ):
 
-        to_plot = self.fractions(self.variant, self.variant_primers)
+        to_plot = self.fractions
         fig, ax = plt.subplots(figsize=(4, 4))
 
         for (unedited, sgRNA, editor), rows in to_plot.groupby(['unedited', 'sgRNAs', 'condition:editor']):
@@ -391,23 +431,24 @@ class Screen:
 
         return fig, ax
 
-    def mismatch_fractions(self, relevant_primers):
+    @memoized_property
+    def mismatch_fractions(self):
         fs = {}
 
         strat = None
 
-        relevant_rows = self.sample_sheet.query('primers == @relevant_primers')
+        relevant_rows = self.sample_sheet.query('primers == @self.variant_primers')
 
-        for sample_name, row in relevant_rows.iterrows():
-            exp = self.exps[self.batch_name, sample_name]
+        for (batch_name, sample_name), row in relevant_rows.iterrows():
+            exp = self.exps[batch_name, sample_name]
 
             if exp.editing_strategy.primary_protospacer is not None:
                 strat = exp.editing_strategy
 
-            fs[exp.identifier.sample_name, row['sgRNAs'], row['condition:deaminase']] = exp.outcome_fractions()
+            fs[batch_name, sample_name, row['sgRNAs'], row['condition:deaminase']] = exp.outcome_fractions()
 
         fs = pd.DataFrame(fs).fillna(0)
-        fs.columns.names = ['sample_name', 'sgRNA', 'deaminase']
+        fs.columns.names = ['batch_name', 'sample_name', 'sgRNA', 'deaminase']
 
         mismatch_fractions = knock_knock.outcome.mismatch_fractions(strat,
                                                                     fs,
@@ -417,8 +458,14 @@ class Screen:
 
         return mismatch_fractions
 
-    def heatmap(self):
-        diagram = visualize_variants.VariantDiagram(self.variant)
+    def heatmap(self,
+                colorblind=False,
+                use_log_for_bystanders=True,
+                editor_subset=None,
+                sgRNA_subset=None,
+               ):
+
+        diagram = visualize_variants.VariantDiagram(self.variant, colorblind=colorblind)
 
         diagram.plot([], draw_label=False, draw_vertical_lines=False)
 
@@ -426,8 +473,8 @@ class Screen:
 
         i = 2.5
 
-        mismatch_fractions = self.mismatch_fractions(self.variant_primers)
-        precise_fractions = self.fractions(self.variant, self.variant_primers)
+        mismatch_fractions = self.mismatch_fractions
+        precise_fractions = self.fractions
 
         if self.variant.strand == '+':
             b_from = 'A'
@@ -438,9 +485,11 @@ class Screen:
             b_to = 'C'
 
         all_A_to_Gs = mismatch_fractions.xs(b_from, level='base').xs(b_to, axis=1, level='base')
+        all_A_to_Gs.sort_index(axis=1, inplace=True)
 
         relevant_bases = [b for b in 'TCAG' if b != b_from]
-        all_non_As = mismatch_fractions.loc[pd.IndexSlice[:, relevant_bases], :].droplevel('base').T.groupby('sample_name').sum().T
+        all_non_As = mismatch_fractions.loc[pd.IndexSlice[:, relevant_bases], :].droplevel('base').T.groupby(['batch_name', 'sample_name']).sum().T
+        all_non_As.sort_index(axis=1, inplace=True)
 
         unedited_order = [
             True,
@@ -457,6 +506,13 @@ class Screen:
                 unedited_rows = unedited_rows.copy()
                 unedited_rows['sgRNAs'] = 'n/a'
                 unedited_rows['condition:editor'] = 'n/a'
+
+            else:
+                if editor_subset is not None:
+                    unedited_rows = unedited_rows.query('`condition:editor` in @editor_subset')
+
+                if sgRNA_subset is not None:
+                    unedited_rows = unedited_rows.query('sgRNAs in @sgRNA_subset')
 
             sgRNA_order = sorted(unedited_rows['sgRNAs'].unique())
 
@@ -475,18 +531,19 @@ class Screen:
 
                     editor_rows = sgRNA_rows.query('`condition:editor` == @editor_name')
 
-                    sample_names = list(editor_rows['sample_name'])
+                    keys = editor_rows[['batch_name', 'sample_name']].values
 
+                    A_to_Gs = pd.concat([all_A_to_Gs[tuple(k)] for k in keys], axis=1).mean(axis=1) * 100
+                    #A_to_Gs = all_A_to_Gs[batch_and_sample_names].mean(axis=1) * 100
 
-                    A_to_Gs = all_A_to_Gs[sample_names].mean(axis=1) * 100
+                    diagram.draw_heatmap_row(A_to_Gs, y, heterozygous=self.heterozygous, use_log_for_bystanders=use_log_for_bystanders)
 
-                    diagram.draw_heatmap_row(A_to_Gs, y, heterozygous=self.heterozygous)
+                    non_As = pd.concat([all_non_As[tuple(k)] for k in keys], axis=1).mean(axis=1) * 100
+                    #non_As = all_non_As[batch_and_sample_names].mean(axis=1) * 100
 
-                    non_As = all_non_As[sample_names].mean(axis=1) * 100
+                    diagram.draw_heatmap_row(non_As, y, heterozygous=self.heterozygous, use_log_for_bystanders=use_log_for_bystanders)
 
-                    diagram.draw_heatmap_row(non_As, y, heterozygous=self.heterozygous)
-
-                    exp = self.exps[self.batch_name, sample_names[0]]
+                    exp = self.exps[tuple(keys[0])]
 
                     if not unedited:
                         editor = visualize_variants.Editor(exp.description['condition:deaminase'], exp.editing_strategy.effector.PAM_pattern)
@@ -494,13 +551,13 @@ class Screen:
                         PAM = self.variant.PAM_from_editing_strategy(exp.editing_strategy, editor)
 
                         diagram.draw_protospacer(PAM,
-                                            y,
-                                            draw_As=False,
-                                            label_A_positions=within_sgRNA_i == 0,
-                                            draw_editing_window=False,
-                                            height=height,
-                                            editor_color=self.editor_to_color[editor_name],
-                                            )
+                                                 y,
+                                                 draw_As=False,
+                                                 label_A_positions=within_sgRNA_i == 0,
+                                                 draw_editing_window=False,
+                                                 height=height,
+                                                 editor_color=self.editor_to_color[editor_name],
+                                                )
 
                     else:
                         # Unedited control
@@ -510,19 +567,21 @@ class Screen:
                                 line_y *= -1
 
                             diagram.ax.axhline(line_y,
-                                            color='grey',
-                                            #alpha=0.1,
-                                            clip_on=False,
-                                            zorder=0.5,
-                                            )
+                                               color='grey',
+                                               #alpha=0.1,
+                                               clip_on=False,
+                                               zorder=0.5,
+                                              )
                         
-
                     i += height
 
                 if diagram.variant.strand == '+':
                     label_y = sgRNA_y + height * len(editor_order)
                 else:
                     label_y = sgRNA_y - height * 1.75
+
+                    if unedited:
+                        label_y += 0.5
 
                 if unedited:
                     sgRNA = 'unedited control'
