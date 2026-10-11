@@ -1,0 +1,8 @@
+figures/*
+data/**/*.fastq.gz
+data/**/*.fastq
+results
+indices
+build
+__pycache__
+.ipynb_checkpoints
