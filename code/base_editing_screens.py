@@ -43,30 +43,42 @@ class Screen:
 
         self.specific_unedited_variant = specific_unedited_variant
 
+        self.variant_primers = variant_primers
+
+    @memoized_property
+    def variant(self):
+        variant = visualize_variants.BaseEditableVariant(self.var_g, self.gene, install=self.install)
+        return variant
+
+    @memoized_property
+    def sample_sheet(self):
         sample_sheets = {}
 
-        for batch_name in batch_names:
-            sample_sheet = pd.DataFrame(knock_knock.experiment.load_sample_sheet(base_dir, batch_name)).T
+        for batch_name in self.batch_names:
+            sample_sheet = pd.DataFrame(knock_knock.experiment.load_sample_sheet(self.base_dir, batch_name)).T
             sample_sheet.index.name = 'sample_name'
 
             sample_sheets[batch_name] = sample_sheet
 
-        self.sample_sheet = pd.concat(sample_sheets, names=['batch_name'])
-
-        self.variant = visualize_variants.BaseEditableVariant(var_g, gene, install=self.install)
-        self.variant_primers = variant_primers
+        sample_sheet = pd.concat(sample_sheets, names=['batch_name'])
 
         def sample_name_to_PAM(batch_and_sample_name):
             batch_name, sample_name = batch_and_sample_name
             exp = self.exps[batch_name, sample_name]
             return knock_knock.effector.effectors[exp.editing_strategy.manual_effector].PAM_pattern
 
-        self.sample_sheet['PAM'] = self.sample_sheet.index.map(sample_name_to_PAM)
-        self.sample_sheet['editor'] = self.sample_sheet['condition:deaminase'] + '-' + self.sample_sheet['PAM']
+        sample_sheet['PAM'] = sample_sheet.index.map(sample_name_to_PAM)
+        sample_sheet['editor'] = sample_sheet['condition:deaminase'] + '-' + sample_sheet['PAM']
+
+        return sample_sheet
 
     @memoized_property
     def exps(self):
         return knock_knock.experiment.get_all_experiments(self.base_dir, conditions={'batch': self.batch_names})
+
+    def get_exp_outcome_counts(self, batch_name, sample_name):
+        exp = self.exps[batch_name, sample_name]
+        return exp.outcome_counts()
 
     @memoized_property
     def fractions(self):
@@ -79,7 +91,11 @@ class Screen:
 
         posedit = self.variant.var_g.posedit
 
-        variant_p = self.variant.variant_genomic_1_p - exp.editing_strategy.offset_for_genomic_1(self.variant.var_g)
+        # We want the variant in target coordinates
+
+        mapping, strand = exp.editing_strategy.genomic_1_to_target(self.variant.var_g)
+
+        variant_p = mapping[self.variant.variant_genomic_1_p]
 
         window = hits.interval.Interval(variant_p - 9, variant_p + 10)
 
@@ -88,6 +104,9 @@ class Screen:
         else:
             edited_base = posedit.edit.ref
 
+        if strand == '-':
+            edited_base = hits.utilities.reverse_complement(edited_base)
+
         mismatch = knock_knock.outcome.Mismatch(variant_p, edited_base)
         precise_details = knock_knock.outcome.Details(mismatches=[mismatch])
 
@@ -95,7 +114,11 @@ class Screen:
 
         for (batch_name, sample_name), row in relevant_rows.iterrows():
             exp = self.exps[batch_name, sample_name]
-            outcome_fractions = knock_knock.outcome.marginalize_over_mismatches_outside_window(exp.outcome_fractions(), window)
+
+            outcome_counts = self.get_exp_outcome_counts(batch_name, sample_name)
+            total_reads = outcome_counts.sum()
+            outcome_fractions = outcome_counts / total_reads
+            outcome_fractions = knock_knock.outcome.marginalize_over_mismatches_outside_window(outcome_fractions, window)
 
             precise_f = outcome_fractions.get(('wild type', 'mismatches', str(precise_details)), 0)
 
@@ -116,7 +139,7 @@ class Screen:
                 'imprecise': imprecise_f * 100,
                 'contains_corrective': contain_corrective_f * 100,
                 'unedited': row['condition:variant'] != str(self.variant.var_g),
-                'read_count': exp.outcome_counts().sum(),
+                'read_count': total_reads,
             }
 
             if self.specific_unedited_variant is not None:
@@ -150,7 +173,7 @@ class Screen:
 
     @memoized_property
     def editors(self):
-        return self.sample_sheet['condition:editor'].unique()
+        return sorted(self.sample_sheet['condition:editor'].unique())
 
     @memoized_property
     def editor_to_color(self):
@@ -348,6 +371,7 @@ class Screen:
     def scatter(self,
                 grouped=True,
                 editors_to_highlight=None,
+                number_markers=False,
                ):
 
         to_plot = self.fractions
@@ -370,6 +394,17 @@ class Screen:
             else:
                 alpha = 0.3
 
+            if number_markers:
+                number = sgRNA.split('_')[-1]
+                if number == 'NTC':
+                    text = '-'
+                else:
+                    text = str(int(number[1:]))
+
+                marker = rf'$\bf{{{text}}}$'
+
+                size = 7
+
             if grouped:
                 x_mean = rows['precise'].mean()
                 x_sem = rows['precise'].sem()
@@ -383,6 +418,7 @@ class Screen:
                         markeredgewidth=0,
                         color=color,
                         alpha=alpha,
+                        clip_on=False,
                     )
 
                 ax.plot([x_mean - x_sem, x_mean + x_sem], [y_mean, y_mean],
@@ -445,7 +481,10 @@ class Screen:
             if exp.editing_strategy.primary_protospacer is not None:
                 strat = exp.editing_strategy
 
-            fs[batch_name, sample_name, row['sgRNAs'], row['condition:deaminase']] = exp.outcome_fractions()
+            outcome_counts = self.get_exp_outcome_counts(batch_name, sample_name)
+            outcome_fractions = outcome_counts / outcome_counts.sum()
+
+            fs[batch_name, sample_name, row['sgRNAs'], row['condition:deaminase']] = outcome_fractions
 
         fs = pd.DataFrame(fs).fillna(0)
         fs.columns.names = ['batch_name', 'sample_name', 'sgRNA', 'deaminase']
@@ -463,6 +502,7 @@ class Screen:
                 use_log_for_bystanders=True,
                 editor_subset=None,
                 sgRNA_subset=None,
+                min_value_to_label=0.1,
                ):
 
         diagram = visualize_variants.VariantDiagram(self.variant, colorblind=colorblind)
@@ -534,30 +574,40 @@ class Screen:
                     keys = editor_rows[['batch_name', 'sample_name']].values
 
                     A_to_Gs = pd.concat([all_A_to_Gs[tuple(k)] for k in keys], axis=1).mean(axis=1) * 100
-                    #A_to_Gs = all_A_to_Gs[batch_and_sample_names].mean(axis=1) * 100
 
-                    diagram.draw_heatmap_row(A_to_Gs, y, heterozygous=self.heterozygous, use_log_for_bystanders=use_log_for_bystanders)
+                    diagram.draw_heatmap_row(A_to_Gs,
+                                             y,
+                                             heterozygous=self.heterozygous,
+                                             use_log_for_bystanders=use_log_for_bystanders,
+                                             min_value_to_label=min_value_to_label,
+                                            )
 
                     non_As = pd.concat([all_non_As[tuple(k)] for k in keys], axis=1).mean(axis=1) * 100
-                    #non_As = all_non_As[batch_and_sample_names].mean(axis=1) * 100
 
-                    diagram.draw_heatmap_row(non_As, y, heterozygous=self.heterozygous, use_log_for_bystanders=use_log_for_bystanders)
+                    diagram.draw_heatmap_row(non_As,
+                                             y,
+                                             heterozygous=self.heterozygous,
+                                             use_log_for_bystanders=use_log_for_bystanders,
+                                             min_value_to_label=min_value_to_label,
+                                            )
 
                     exp = self.exps[tuple(keys[0])]
-
+                    
                     if not unedited:
-                        editor = visualize_variants.Editor(exp.description['condition:deaminase'], exp.editing_strategy.effector.PAM_pattern)
+                        if exp.editing_strategy.primary_protospacer is not None:
+                            
+                            editor = visualize_variants.Editor(editor_rows.iloc[0]['condition:deaminase'], exp.editing_strategy.effector.PAM_pattern)
 
-                        PAM = self.variant.PAM_from_editing_strategy(exp.editing_strategy, editor)
+                            PAM = self.variant.PAM_from_editing_strategy(exp.editing_strategy, editor)
 
-                        diagram.draw_protospacer(PAM,
-                                                 y,
-                                                 draw_As=False,
-                                                 label_A_positions=within_sgRNA_i == 0,
-                                                 draw_editing_window=False,
-                                                 height=height,
-                                                 editor_color=self.editor_to_color[editor_name],
-                                                )
+                            diagram.draw_protospacer(PAM,
+                                                    y,
+                                                    draw_As=False,
+                                                    label_A_positions=within_sgRNA_i == 0,
+                                                    draw_editing_window=False,
+                                                    height=height,
+                                                    editor_color=self.editor_to_color[editor_name],
+                                                    )
 
                     else:
                         # Unedited control
@@ -568,7 +618,6 @@ class Screen:
 
                             diagram.ax.axhline(line_y,
                                                color='grey',
-                                               #alpha=0.1,
                                                clip_on=False,
                                                zorder=0.5,
                                               )
@@ -585,6 +634,9 @@ class Screen:
 
                 if unedited:
                     sgRNA = 'unedited control'
+                    x = diagram.variant.variant_p_in_window
+
+                elif exp.editing_strategy.primary_protospacer is None:
                     x = diagram.variant.variant_p_in_window
 
                 else:

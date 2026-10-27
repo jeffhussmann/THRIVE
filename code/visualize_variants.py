@@ -45,7 +45,6 @@ def simple_name_to_hgvs(simple_name):
     MANE_row = get_MANE_row(gene_name)
 
     RefSeq_nuc = MANE_row['RefSeq_nuc']
-    Ensembl_nuc = MANE_row['Ensembl_nuc'].split('.')[0]
 
     var_c = hgvs.easy.parse(f'{RefSeq_nuc}:{change}')
     
@@ -100,6 +99,11 @@ deaminase_specs = {
 
     'ABE7.10-HRHSK': {
         'optimal_window': [5, 7],
+        'bystander_window': [4, 8],
+    },
+
+    'CBE': {
+        'optimal_window': [4, 8],
         'bystander_window': [4, 8],
     },
 }
@@ -274,19 +278,31 @@ class BaseEditableVariant:
                 
             genomic_1_p = self.window_p_to_genomic_1_p(window_p)
     
-            # If bottom strand, rc the variant
-    
-            if self.strand == '+':
-                ref = 'A'
-                alt = 'G'
-            else: # self.strand == '-'
-                ref = 'T'
-                alt = 'C'
-        
-            if b == 'A':
-                variant = varcode.Variant(self.contig, genomic_1_p, ref, alt)
+            if self.type == 'ABE':
+                if self.strand == '+':
+                    ref = 'A'
+                    alt = 'G'
+                else: # self.strand == '-'
+                    ref = 'T'
+                    alt = 'C'
+            
+                if b == 'A':
+                    variant = varcode.Variant(self.contig, genomic_1_p, ref, alt)
 
-                possible_bystander_effects[window_p] = self.get_effect(variant)
+                    possible_bystander_effects[window_p] = self.get_effect(variant)
+
+            elif self.type == 'CBE':
+                if self.strand == '+':
+                    ref = 'C'
+                    alt = 'T'
+                else: # self.strand == '-'
+                    ref = 'G'
+                    alt = 'A'
+            
+                if b == 'C':
+                    variant = varcode.Variant(self.contig, genomic_1_p, ref, alt)
+
+                    possible_bystander_effects[window_p] = self.get_effect(variant)
                 
         return possible_bystander_effects
 
@@ -361,11 +377,18 @@ class BaseEditableVariant:
             else:
                 PAM_start = feature.end
             
-            PAM_start += editing_strategy.offset_for_genomic_1(self.var_g)
+            mapping, strand = editing_strategy.genomic_1_to_target(self.var_g)
+            mapping = hits.utilities.reverse_dictionary(mapping)
+
+            PAM_start = mapping[PAM_start]
     
             PAM_start_window_p = self.genomic_1_p_to_window_p(PAM_start)
 
             PAM = self.PAM(PAM_start_window_p, editor)
+
+            expected_sequence = editing_strategy.protospacer_feature.sequence(editing_strategy.reference_sequences)
+            if PAM['protospacer'] != expected_sequence:
+                raise ValueError(f'expected: {expected_sequence}, produced: {PAM['protospacer']}')
 
         return PAM
 
@@ -974,8 +997,10 @@ class VariantDiagram:
                         color='black',
                         )
 
+        edit_base = 'A' if self.variant.type == 'ABE' else 'C'
+
         if draw_As:
-            self.annotate_in_window_coords('A',
+            self.annotate_in_window_coords(edit_base,
                                     p + PAM['variant_offset_from_PAM'],
                                     y,
                                     color='tab:green',
@@ -1023,7 +1048,7 @@ class VariantDiagram:
             color = effect_to_color(effect['effect'], colorblind=self.colorblind)
 
             if draw_As:
-                self.annotate_in_window_coords('A',
+                self.annotate_in_window_coords(edit_base,
                                         p + effect['bystander_offset_from_PAM'],
                                         y,
                                         color=color,
@@ -1071,7 +1096,7 @@ class VariantDiagram:
         cumulative_offset = 0
         
         for i, (label, color) in enumerate([
-            ('Effects of possible A→G edits:', 'black'),
+            (f'Effects of possible {'A→G' if self.variant.type == 'ABE' else 'C→T'} edits:', 'black'),
             (f'{'installation' if self.variant.install else 'correction'} of pathogenic variant', effect_type_to_color['pathogenic', self.colorblind]),
             ('synonymous', effect_type_to_color[varcode.effects.Silent, self.colorblind]),
             ('nonsynonymous', effect_type_to_color[varcode.effects.Substitution, self.colorblind]),
