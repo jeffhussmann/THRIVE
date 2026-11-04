@@ -935,6 +935,8 @@ class VariantDiagram:
                          editor_color='black',
                         ):
 
+        # Draw PAM.
+
         p = PAM['PAM_start']
 
         PAM_x0 = p
@@ -943,94 +945,26 @@ class VariantDiagram:
         PAM_y1 = y + height / 2
 
         self.draw_rect_in_window_coords(PAM_x0,
-                                   PAM_x1,
-                                   PAM_y0,
-                                   PAM_y1,
-                       alpha=1,
-                       fill=False,
-                      )
-
-        protospacer_x0 = p - len(PAM['protospacer'])
-        protospacer_x1 = p - 1
-        protospacer_y0 = y - height / 2
-        protospacer_y1 = y + height / 2
-
-        self.draw_rect_in_window_coords(protospacer_x0,
-                       protospacer_x1,
-                       protospacer_y0,
-                       protospacer_y1,
-                       alpha=1,
-                       fill=False,
-                      )
-
-        if draw_editing_window:
-            # Draw optimal editing window.
-
-            window_height = height / 3
-            window_y0 = protospacer_y1 + 0.01 * height
-
-            optimal_offsets = PAM['editor'].deaminase.offsets_from_PAM['optimal_window']
-            optimal_x0 = p + min(optimal_offsets)
-            optimal_x1 = p + max(optimal_offsets)
-
-            self.draw_rect_in_window_coords(optimal_x0,
-                        optimal_x1,
-                        window_y0 + window_height,
-                        window_y0 + 2 * window_height,
-                        alpha=0.3,
-                        fill=True,
-                        color='black',
-                        )
-
-            # Draw broader bystander editing window.
-
-            bystander_offsets = PAM['editor'].deaminase.offsets_from_PAM['bystander_window']
-            bystander_x0 = p + min(bystander_offsets)
-            bystander_x1 = p + max(bystander_offsets)
-
-            self.draw_rect_in_window_coords(bystander_x0,
-                        bystander_x1,
-                        window_y0,
-                        window_y0 + window_height,
-                        alpha=0.3,
-                        fill=True,
-                        color='black',
-                        )
-
-        edit_base = 'A' if self.variant.type == 'ABE' else 'C'
-
-        if draw_As:
-            self.annotate_in_window_coords(edit_base,
-                                    p + PAM['variant_offset_from_PAM'],
-                                    y,
-                                    color='tab:green',
-                                    ha='center',
-                                    va='center',
-                                    fontname='DejaVu Sans',
-                                    size=8,
-                                    weight='bold',
-                                    )
-
-        if label_A_positions:
-            variant_position_in_protospacer = PAM['variant_position_in_protospacer']
-            self.annotate_in_window_coords(str(variant_position_in_protospacer),
-                                      p + PAM['variant_offset_from_PAM'],
-                                      y - height / 2,
-                                      xytext=(0, -2),
-                                      textcoords='offset points',
-                                      color='tab:green',
-                                      ha='center',
-                                      va='top',
-                                      fontname='DejaVu Sans',
-                                      size=6,
-                                      weight='bold',
-                                     )
+                                        PAM_x1,
+                                        PAM_y0,
+                                        PAM_y1,
+                                        alpha=1,
+                                        fill=False,
+                                       )
 
         for p_offset, b in enumerate(PAM['editor'].PAM):
+
+            target_b = self.variant.target_strand_window_sequence[p + p_offset]
+            pattern, *match_starts = Bio.SeqUtils.nt_search(target_b, b)
+            if 0 in match_starts:
+                color = 'black'
+            else:
+                color = 'red'
+
             self.annotate_in_window_coords(b,
                                            p + p_offset,
                                            y,
-                                           color='black',
+                                           color=color,
                                            ha='center',
                                            va='center',
                                            fontname='DejaVu Sans',
@@ -1044,53 +978,132 @@ class VariantDiagram:
                                            ),
                                           )
 
+
+        # Draw protospacer.
+
+        protospacer_x0 = p - len(PAM['protospacer'])
+        protospacer_x1 = p - 1
+        protospacer_y0 = y - height / 2
+        protospacer_y1 = y + height / 2
+
+        self.draw_rect_in_window_coords(protospacer_x0,
+                                        protospacer_x1,
+                                        protospacer_y0,
+                                        protospacer_y1,
+                                        alpha=1,
+                                        fill=False,
+                                       )
+
+        if draw_editing_window:
+            # Draw optimal editing window.
+
+            window_height = height / 3
+            window_y0 = protospacer_y1 + 0.01 * height
+
+            optimal_offsets = PAM['editor'].deaminase.offsets_from_PAM['optimal_window']
+            optimal_x0 = p + min(optimal_offsets)
+            optimal_x1 = p + max(optimal_offsets)
+
+            self.draw_rect_in_window_coords(optimal_x0,
+                                            optimal_x1,
+                                            window_y0 + window_height,
+                                            window_y0 + 2 * window_height,
+                                            alpha=0.3,
+                                            fill=True,
+                                            color='black',
+                                           )
+
+            # Draw broader bystander editing window.
+
+            bystander_offsets = PAM['editor'].deaminase.offsets_from_PAM['bystander_window']
+            bystander_x0 = p + min(bystander_offsets)
+            bystander_x1 = p + max(bystander_offsets)
+
+            self.draw_rect_in_window_coords(bystander_x0,
+                                            bystander_x1,
+                                            window_y0,
+                                            window_y0 + window_height,
+                                            alpha=0.3,
+                                            fill=True,
+                                            color='black',
+                                           )
+
+        edit_base = 'A' if self.variant.type == 'ABE' else 'C'
+
+        if draw_As:
+            self.annotate_in_window_coords(edit_base,
+                                           p + PAM['variant_offset_from_PAM'],
+                                           y,
+                                           color='tab:green',
+                                           ha='center',
+                                           va='center',
+                                           fontname='DejaVu Sans',
+                                           size=8,
+                                           weight='bold',
+                                          )
+
+        if label_A_positions:
+            variant_position_in_protospacer = PAM['variant_position_in_protospacer']
+            self.annotate_in_window_coords(str(variant_position_in_protospacer),
+                                           p + PAM['variant_offset_from_PAM'],
+                                           y - height / 2,
+                                           xytext=(0, -2),
+                                           textcoords='offset points',
+                                           color='tab:green',
+                                           ha='center',
+                                           va='top',
+                                           fontname='DejaVu Sans',
+                                           size=6,
+                                           weight='bold',
+                                          )
+
         for effect in PAM['bystander_effects']:
             color = effect_to_color(effect['effect'], colorblind=self.colorblind)
 
             if draw_As:
                 self.annotate_in_window_coords(edit_base,
-                                        p + effect['bystander_offset_from_PAM'],
-                                        y,
-                                        color=color,
-                                        ha='center',
-                                        va='center',
-                                        fontname='DejaVu Sans',
-                                        size=8,
-                                        weight='bold',
-                                        )
+                                               p + effect['bystander_offset_from_PAM'],
+                                               y,
+                                               color=color,
+                                               ha='center',
+                                               va='center',
+                                               fontname='DejaVu Sans',
+                                               size=8,
+                                               weight='bold',
+                                              )
 
             if label_A_positions:
                 bystander_position_in_protospacer = effect['bystander_position_in_protospacer']
                 self.annotate_in_window_coords(str(bystander_position_in_protospacer),
-                                        p + effect['bystander_offset_from_PAM'],
-                                        y - height / 2,
-                                        xytext=(0, -2),
-                                        textcoords='offset points',
-                                        color=color,
-                                        ha='center',
-                                        va='top',
-                                        fontname='DejaVu Sans',
-                                        size=6,
-                                        weight='bold',
-                                        )
+                                               p + effect['bystander_offset_from_PAM'],
+                                               y - height / 2,
+                                               xytext=(0, -2),
+                                               textcoords='offset points',
+                                               color=color,
+                                               ha='center',
+                                               va='top',
+                                               fontname='DejaVu Sans',
+                                               size=6,
+                                               weight='bold',
+                                              )
 
         # Label editor
         self.annotate_in_window_coords(PAM['editor'].deaminase.name,
-                                  PAM_x1 + 0.5,
-                                  y,
-                                  xytext=(3, 0),
-                                  textcoords='offset points',
-                                  ha='left',
-                                  va='center',
-                                  size=8,
-                                  color=editor_color,
-                                  bbox=dict(boxstyle='square,pad=0',
-                                            fc='white',
-                                            ec='white',
-                                            lw=0,
-                                           ),
-                                  zorder=5,
-                                 )
+                                       PAM_x1 + 0.5,
+                                       y,
+                                       xytext=(3, 0),
+                                       textcoords='offset points',
+                                       ha='left',
+                                       va='center',
+                                       size=8,
+                                       color=editor_color,
+                                       bbox=dict(boxstyle='square,pad=0',
+                                                 fc='white',
+                                                 ec='white',
+                                                 lw=0,
+                                                ),
+                                       zorder=5,
+                                      )
 
     def draw_legend(self, y=1):
         cumulative_offset = 0
