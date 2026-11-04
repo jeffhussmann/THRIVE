@@ -1,9 +1,9 @@
-NC_000003.12:g.48574262C>T:
+DEB169:
   genome: hg38
   variants:
     - NC_000003.12:g.48574262C>T
 
-NC_000003.12:g.48566912G>A:
+DEB153:
   genome: hg38
   variants:
     - NC_000003.12:g.48566912G>A
@@ -13,7 +13,7 @@ NueSKIN06:
   variants:
     - NC_000003.12:g.48578354G>A
 
-COL7A1 c.4894C>T:
+DEB181:
   genome: hg38
   variants:
     - NC_000003.12:g.48581265G>A
@@ -49,4 +49,32 @@ IEI-023:
     - NC_000020.11:g.44626498A>G
     - NC_000020.11:g.44623053C>T
 
+DEB125:
+  genome: hg38
+  variants:
+    - NC_000003.12:g.48570129C>T
 
+SCVI4155:
+  genome: hg38
+  variants:
+    - NC_000012.12:g.51807101G>A
+
+MAPT_R406W:
+  genome: hg38
+  variants:
+    - NC_000017.11:g.46024061C>T
+
+NuSKIN10:
+  genome: hg38
+  variants:
+    - NC_000001.11:g.209650092G>A
+    - NC_000001.11:g.209633070C>T
+
+Huh7-ASS1-lenti:
+  genome: ASS1_lenti
+  variant_flanking_regions:
+    - NC_000009.12:g.130480447G>A
+    - NC_000009.12:g.130489464G>A
+    - NC_000002.12:g.210591886C>T
+
+    
