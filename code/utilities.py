@@ -17,9 +17,24 @@ def flatten_basespace_directory_structure(data_dir):
         if sub_dir.is_dir():
             sub_dir.rmdir()
 
-def process_sample_sheet(base_dir, incoming_fn):
-    PAM_to_effector = {
+def load_registries(base_dir):
+    base_dir = Path(base_dir)
+
+    guides = pd.read_csv(base_dir / 'registries' / 'guides.csv', index_col='Name').fillna('')
+    guides.columns = guides.columns.str.strip()
+
+    variants = pd.read_csv(base_dir / 'registries' / 'variants.csv', index_col='Name').fillna('')
+    variants.index = variants.index.str.strip()
+
+    editors = pd.read_csv(base_dir / 'registries' / 'editors.csv', index_col='F#').fillna('')
+    editors.index = editors.index.str.strip()
+
+    return guides, variants, editors
+
+def process_sample_sheet(base_dir, incoming_fn, variant_to_which_read=None):
+    PAM_to_BE_effector = {
         'NGG': 'SpCas9_D10A',
+        'NGA': 'SpCas9-NGA',
         'NRRH': 'SpCas9-NRRH_D10A',
         'NRTH': 'SpCas9-NRTH_D10A',
         'NRCH': 'SpCas9-NRCH_D10A',
@@ -36,21 +51,21 @@ def process_sample_sheet(base_dir, incoming_fn):
         'ARGIMR': 'SpCas9(ARGIMR)_D10A',
         'NG': 'SpCas9-NG_D10A',
         'eVRQR': 'SpCas9_eVRQR_D10A',
-        '': 'SpCas9_D10A',
         'eMQKSER': 'SpCas9(eMQKSER)_D10A',
         'KWRQLC': 'SpCas9(KWRQLC)_D10A',
         'MRKCRS': 'SpCas9(MRKCRS)_D10A',
         'VRAVQL': 'SpCas9(VRAVQL)_D10A',
+        'NWA': 'SpCas9-NWA_D10A',
+        '': 'SpCas9',
     }
 
-    guides = pd.read_csv(base_dir / 'registries' / 'guides.csv', index_col='Name').fillna('')
-    guides.columns = guides.columns.str.strip()
+    PAM_to_PE_effector = {
+        'NGG': 'SpCas9_H840A',
+        'NGA': 'SpCas9-NGA_H840A',
+        '': 'SpCas9_H840A',
+    }
 
-    variants = pd.read_csv(base_dir / 'registries' / 'variants.csv', index_col='Name').fillna('')
-    variants.index = variants.index.str.strip()
-
-    editors = pd.read_csv(base_dir / 'registries' / 'editors.csv', index_col='F#').fillna('')
-    editors.index = editors.index.str.strip()
+    guides, variants, editors = load_registries(base_dir)
 
     sgRNA_to_variant = guides['Variant Name'].map(str.strip)
 
@@ -69,10 +84,7 @@ def process_sample_sheet(base_dir, incoming_fn):
 
         primers = ';'.join([row['Primer 1'], row['Primer 2']])
 
-        editor = row['Editor']
-
         sgRNAs = row['sgRNA']
-
 
         if row['F#'] != '':
             editor_row = editors.loc[row['F#']]
@@ -81,27 +93,60 @@ def process_sample_sheet(base_dir, incoming_fn):
 
             deaminase = editor.rsplit('-', 1)[0]
 
-            effector = PAM_to_effector[PAM_preference]
+            if editor_row['Type'] == 'PE':
+                effector = PAM_to_PE_effector[PAM_preference]
+            else:
+                effector = PAM_to_BE_effector[PAM_preference]
 
         else:
             editor = ''
             deaminase = ''
 
-            effector = PAM_to_effector['']
-        
+            effector = PAM_to_BE_effector['']
+
+        sgRNAs_list = sgRNAs.split(';')
+
+        variant_names = set(variant for sgRNA in sgRNAs_list if (variant := sgRNA_to_variant.get(sgRNA, '')) != '')
+
+        if len(variant_names) == 0:
+            variant = ''
+
+        elif len(variant_names) == 1:
+            variant_name = list(variant_names)[0]
+            variant = variants.loc[variant_name, 'HGVS (genomic)']
+
+        else:
+            raise ValueError
+
         sample_sheet[name] = {
             'platform': 'illumina',
             'experiment_type': 'prime_editing',
-            'R1': R1_fn,
-            'R2': R2_fn,
             'genotype': row['Genotype'],
             'primers': primers,
             'sgRNAs': sgRNAs,
             'effector': effector,
             'condition:deaminase': deaminase,
-            'condition:variant': variants.loc[sgRNA_to_variant[sgRNAs], 'HGVS (genomic)'] if sgRNAs != '' else '',
+            'condition:variant': variant,
             'condition:editor': editor,
         }
+
+        if variant_to_which_read is None:
+            sample_sheet[name].update({
+                'R1': R1_fn,
+                'R2': R2_fn,
+            })
+
+        else:
+            which_read = variant_to_which_read.get(variant_name, 'R1')
+
+            if which_read == 'R1':
+                fn = R1_fn
+            else:
+                fn = R2_fn
+
+            sample_sheet[name].update({
+                'R1': fn,
+            })
 
         sample_sheet[name].update(row[row.index.str.startswith('condition:')])
 

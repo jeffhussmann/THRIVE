@@ -24,6 +24,7 @@ class Screen:
                  heterozygous=False,
                  install=False,
                  specific_unedited_variant=None,
+                 ignore_indels=False,
                 ):
 
         self.base_dir = base_dir
@@ -44,6 +45,8 @@ class Screen:
         self.specific_unedited_variant = specific_unedited_variant
 
         self.variant_primers = variant_primers
+
+        self.ignore_indels = ignore_indels
 
     @memoized_property
     def variant(self):
@@ -76,8 +79,14 @@ class Screen:
     def exps(self):
         return knock_knock.experiment.get_all_experiments(self.base_dir, conditions={'batch': self.batch_names})
 
-    def get_exp_outcome_counts(self, batch_name, sample_name):
-        exp = self.exps[batch_name, sample_name]
+    exp_keys = ['batch_name', 'sample_name']
+
+    def row_to_exp(self, row):
+        values = tuple(row[key] for key in self.exp_keys)
+        return self.exps[values]
+
+    def row_to_outcome_counts(self, row):
+        exp = self.row_to_exp(row)
         return exp.outcome_counts()
 
     @memoized_property
@@ -87,10 +96,10 @@ class Screen:
         if self.specific_unedited_variant is not None:
             relevant_rows = relevant_rows.query('`condition:variant` == @self.var_g or `condition:variant` == @self.specific_unedited_variant')
 
-        exp = self.exps[relevant_rows.index[0]]
-
         posedit = self.variant.var_g.posedit
 
+        edited_rows = relevant_rows.query('`condition:variant` == @self.var_g')
+        exp = self.exps[edited_rows.index[0]]
         # We want the variant in target coordinates
 
         mapping, strand = exp.editing_strategy.genomic_1_to_target(self.variant.var_g)
@@ -108,51 +117,69 @@ class Screen:
             edited_base = hits.utilities.reverse_complement(edited_base)
 
         mismatch = knock_knock.outcome.Mismatch(variant_p, edited_base)
+        mismatch_string = str(knock_knock.outcome.Mismatch(variant_p, edited_base))
+
         precise_details = knock_knock.outcome.Details(mismatches=[mismatch])
+        precise_details_string = str(precise_details)
 
-        data = {}
+        data = []
 
-        for (batch_name, sample_name), row in relevant_rows.iterrows():
-            exp = self.exps[batch_name, sample_name]
-
-            outcome_counts = self.get_exp_outcome_counts(batch_name, sample_name)
+        for _, row in relevant_rows.reset_index().iterrows():
+            outcome_counts = self.row_to_outcome_counts(row)
             total_reads = outcome_counts.sum()
             outcome_fractions = outcome_counts / total_reads
             outcome_fractions = knock_knock.outcome.marginalize_over_mismatches_outside_window(outcome_fractions, window)
 
-            precise_f = outcome_fractions.get(('wild type', 'mismatches', str(precise_details)), 0)
+            if self.ignore_indels:
+                precise_outcomes = [
+                    (c, s, d) for c, s, d in outcome_fractions.index
+                    if str(knock_knock.outcome.Details.from_string(d)['mismatches']) == mismatch_string
+                ]
+                precise_f = outcome_fractions.loc[precise_outcomes].sum()
+                imprecise_outcomes = [
+                    (c, s, d) for c, s, d in outcome_fractions.index
+                    if str(knock_knock.outcome.Details.from_string(d)['mismatches']) not in [mismatch_string, '']
+                ]
+                imprecise_f = outcome_fractions.loc[imprecise_outcomes].sum()
 
-            imprecise_f = outcome_fractions.get(('wild type', 'mismatches'), pd.Series()).sum() - precise_f
+            else:
+                precise_f = outcome_fractions.get(('wild type', 'mismatches', precise_details_string), 0)
+
+                imprecise_f = outcome_fractions.get(('wild type', 'mismatches'), pd.Series()).sum() - precise_f
+            
+            indel_f = 1 - outcome_fractions.get('wild type', pd.Series()).sum()
 
             contain_corrective = []
 
             for c, s, d in outcome_fractions.index:
-                if c == 'wild type' and s == 'mismatches':
+                if (c == 'wild type' and s == 'mismatches') or self.ignore_indels:
                     mismatches = knock_knock.outcome.Details.from_string(d)['mismatches'].mismatches
                     if mismatch in mismatches:
                         contain_corrective.append((c, s, d))
 
             contain_corrective_f = outcome_fractions.loc[contain_corrective].sum()
             
-            data[batch_name, sample_name] = {
+            row_data = {
                 'precise': precise_f * 100,
                 'imprecise': imprecise_f * 100,
+                'indels': indel_f * 100,
                 'contains_corrective': contain_corrective_f * 100,
                 'unedited': row['condition:variant'] != str(self.variant.var_g),
                 'read_count': total_reads,
             }
 
             if self.specific_unedited_variant is not None:
-                data[batch_name, sample_name]['unedited'] = row['condition:variant'] == self.specific_unedited_variant
+                row_data['unedited'] = row['condition:variant'] == self.specific_unedited_variant
 
-            data[batch_name, sample_name].update(**row)
+            row_data.update(**row)
 
-        df = pd.DataFrame(data).T
+            data.append(row_data)
+
+        df = pd.DataFrame(data)
 
         df['total_modified'] = df['precise'] + df['imprecise']
 
-        df.index.names = ['batch_name', 'sample_name']
-        df = df.reset_index().sort_values(['unedited', 'sgRNAs'])
+        df = df.sort_values(['unedited', 'sgRNAs'])
 
         return df
 
@@ -187,22 +214,38 @@ class Screen:
 
         return editor_to_color
 
-    def plot(self, plot_total_modified=False):
+    def plot(self, plot_contains_corrective=False, plot_total_modified=False, plot_indels=True):
         to_plot = self.fractions
 
         num_groups = to_plot.query('unedited == False').groupby(['sgRNAs', 'condition:editor']).ngroups + 1
 
-        if plot_total_modified:
-            quantities_to_plot = [
-                'total_modified',
-            ]
-        else:
-            quantities_to_plot = [
-                'precise',
-                'imprecise',
-            ]
+        quantities_to_plot = [
+            'precise',
+            'imprecise',
+        ]
 
-        fig, axs = plt.subplots(1, len(quantities_to_plot), figsize=(3 * len(quantities_to_plot), 6 * num_groups / 25), sharey=True, squeeze=False)
+        if plot_contains_corrective:
+            quantities_to_plot.append('contains_corrective')
+
+        if plot_total_modified:
+            quantities_to_plot.append('total_modified')
+
+        if plot_indels:
+            quantities_to_plot.append('indels')
+
+        quantity_to_xlabel = {
+            'precise': '% of reads with precise correction\nof pathogenic variant',
+            'contains_corrective': '% of reads with any\nsubstitution editing that\nincludes correction\nof pathogenic variant',
+            'imprecise': '% of reads with imprecise\nsubstitution editing\n(any other mismatches)',
+            'indels': '% of reads with imprecise\nnon-substitution editing',
+            'total_modified': '% of reads with any modified allele',
+        }
+
+        fig, axs = plt.subplots(1, len(quantities_to_plot),
+                                figsize=(3 * len(quantities_to_plot), 6 * num_groups / 25),
+                                sharey=True,
+                                squeeze=False,
+                               )
         axs = axs[0]
 
         gap = 0.75
@@ -218,7 +261,13 @@ class Screen:
                 unedited_rows['sgRNAs'] = 'n/a'
                 unedited_rows['condition:editor'] = 'n/a'
 
-            for sgRNA, sgRNA_rows in unedited_rows.groupby('sgRNAs', sort=False):
+                sgRNA_order = ['n/a']
+
+            else:
+                sgRNA_order = self.sgRNA_order
+
+            for sgRNA in sgRNA_order:
+                sgRNA_rows = unedited_rows.query('sgRNAs == @sgRNA')
                 y += gap
 
                 sgRNA_ys = []
@@ -252,7 +301,7 @@ class Screen:
                                 markeredgewidth=0,
                                 markersize=size,
                                 clip_on=False,
-                            )
+                               )
                     
                         ax.plot([mean - stds, mean + stds], [y, y],
                                 linestyle='-',
@@ -261,7 +310,7 @@ class Screen:
                                 marker='none',
                                 alpha=0.3,
                                 clip_on=False,
-                            )
+                               )
 
                         ax.annotate(f'{mean:0.1f}',
                                     xy=(mean, y),
@@ -273,7 +322,7 @@ class Screen:
                                     color='black',
                                     size=5,
                                     family='monospace',
-                                )
+                                   )
 
                     if unedited:
                         label = 'unedited control'
@@ -306,14 +355,7 @@ class Screen:
                                     color='black',
                                     size=8,
                                     annotation_clip=False,
-                                )
-
-                    #axs[0].plot([-50, -50], [min(sgRNA_ys), max(sgRNA_ys)], 
-                    #            '-',
-                    #            clip_on=False,
-                    #            color='black',
-                    #            alpha=0.5,
-                    #           )
+                                   )
 
                 y -= 0.5
 
@@ -331,7 +373,7 @@ class Screen:
                         size=8,
                         annotation_clip=False,
                         weight='bold',
-                    )
+                       )
 
         axs[0].annotate('editor:',
                         xy=(0, 0),
@@ -344,27 +386,24 @@ class Screen:
                         size=8,
                         annotation_clip=False,
                         weight='bold',
-                    )
+                       )
 
         axs[0].set_ylim(-gap / 2, y + gap / 2)
 
         ax.set_yticks(y_ticks, labels=[])
 
         axs[0].invert_yaxis()
-        axs[0].set_xlim(0, 100)
-        axs[0].set_xticks([0, 25, 50, 75, 100])
-        axs[-1].set_xlim(0, 100)
-        axs[-1].set_xticks([0, 25, 50, 75, 100])
 
-        if self.heterozygous:
-            axs[0].axvline(50, linestyle='--', color='black', alpha=0.3)
+        for ax in axs:
+            ax.set_xlim(0, 100)
+            ax.set_xticks([0, 25, 50, 75, 100])
 
-        if plot_total_modified:
-            axs[0].set_xlabel('% of reads with any modified allele', size=8)
 
-        else:
-            axs[0].set_xlabel('% of reads with precise correction\nof pathogenic variant', size=8)
-            axs[-1].set_xlabel('% of reads with\nimprecise editing\n(any other mismatches)', size=8)
+        for ax, quantity in zip(axs, quantities_to_plot):
+            ax.set_xlabel(quantity_to_xlabel[quantity])
+
+            if self.heterozygous and quantity in ['precise', 'contains_corrective']:
+                ax.axvline(50, linestyle='--', color='black', alpha=0.3)
 
         return fig, axs
 
@@ -475,16 +514,16 @@ class Screen:
 
         relevant_rows = self.sample_sheet.query('primers == @self.variant_primers')
 
-        for (batch_name, sample_name), row in relevant_rows.iterrows():
-            exp = self.exps[batch_name, sample_name]
+        for _, row in relevant_rows.reset_index().iterrows():
+            exp = self.row_to_exp(row)
 
             if exp.editing_strategy.primary_protospacer is not None:
                 strat = exp.editing_strategy
 
-            outcome_counts = self.get_exp_outcome_counts(batch_name, sample_name)
+            outcome_counts = self.row_to_outcome_counts(row)
             outcome_fractions = outcome_counts / outcome_counts.sum()
 
-            fs[batch_name, sample_name, row['sgRNAs'], row['condition:deaminase']] = outcome_fractions
+            fs[row['batch_name'], row['sample_name'], row['sgRNAs'], row['condition:deaminase']] = outcome_fractions
 
         fs = pd.DataFrame(fs).fillna(0)
         fs.columns.names = ['batch_name', 'sample_name', 'sgRNA', 'deaminase']
@@ -496,6 +535,28 @@ class Screen:
                                                                    )
 
         return mismatch_fractions
+
+    @memoized_property
+    def sgRNA_order(self):
+        ''' sgRNAs ordered by the position of the variant in their protospacers '''
+
+        sgRNA_to_variant_position_in_protospacer = {}
+
+        for sgRNA, rows in self.fractions.query('unedited == False').groupby('sgRNAs'):
+            row = rows.iloc[0]
+            exp = self.exps[row['batch_name'], row['sample_name']]
+
+            editor = visualize_variants.Editor(row['condition:deaminase'], exp.editing_strategy.effector.PAM_pattern)
+            
+            PAM = self.variant.PAM_from_editing_strategy(exp.editing_strategy, editor)
+
+            sgRNA_to_variant_position_in_protospacer[sgRNA] = PAM['variant_position_in_protospacer']
+
+        sgRNA_to_variant_position_in_protospacer = pd.Series(sgRNA_to_variant_position_in_protospacer)
+
+        sgRNA_order = sgRNA_to_variant_position_in_protospacer.sort_values().index
+
+        return sgRNA_order
 
     def heatmap(self,
                 colorblind=False,
@@ -547,6 +608,8 @@ class Screen:
                 unedited_rows['sgRNAs'] = 'n/a'
                 unedited_rows['condition:editor'] = 'n/a'
 
+                sgRNA_order = ['n/a']
+
             else:
                 if editor_subset is not None:
                     unedited_rows = unedited_rows.query('`condition:editor` in @editor_subset')
@@ -554,7 +617,10 @@ class Screen:
                 if sgRNA_subset is not None:
                     unedited_rows = unedited_rows.query('sgRNAs in @sgRNA_subset')
 
-            sgRNA_order = sorted(unedited_rows['sgRNAs'].unique())
+                sgRNA_order = self.sgRNA_order
+
+                if sgRNA_subset is not None:
+                    sgRNA_order = [sgRNA for sgRNA in sgRNA_order if sgRNA in sgRNA_subset]
 
             if self.variant.strand == '+':
                 sgRNA_order = sgRNA_order[::-1]
@@ -601,12 +667,12 @@ class Screen:
                             PAM = self.variant.PAM_from_editing_strategy(exp.editing_strategy, editor)
 
                             diagram.draw_protospacer(PAM,
-                                                    y,
-                                                    draw_As=False,
-                                                    label_A_positions=within_sgRNA_i == 0,
-                                                    draw_editing_window=False,
-                                                    height=height,
-                                                    editor_color=self.editor_to_color[editor_name],
+                                                     y,
+                                                     draw_As=False,
+                                                     label_A_positions=within_sgRNA_i == 0,
+                                                     draw_editing_window=False,
+                                                     height=height,
+                                                     editor_color=self.editor_to_color[editor_name],
                                                     )
 
                     else:

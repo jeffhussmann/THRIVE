@@ -3,6 +3,7 @@ import logging
 import bokeh.palettes
 import Bio.SeqUtils
 import hgvs.easy
+import hgvs.parser
 import matplotlib.colors
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,15 +15,17 @@ import varcode
 import hits.genomes
 import hits.utilities
 
+from pathlib import Path
+
 memoized_property = hits.utilities.memoized_property
 
 logger = logging.getLogger(__name__)
 
 ensembl = pyensembl.EnsemblRelease(species='human')
 
-genomic_sequence_fetcher = hits.genomes.build_region_fetcher('/home/jah/indices/hg38/fasta')
+genomic_sequence_fetcher = hits.genomes.build_region_fetcher(Path.home() / 'indices/hg38/fasta')
 
-MANE_transcripts = pd.read_csv('/home/jah/projects/THRIVE/data/MANE.GRCh38.v1.5.summary.txt', sep='\t')
+MANE_transcripts = pd.read_csv(Path.home() / 'projects/THRIVE/data/MANE.GRCh38.v1.5.summary.txt', sep='\t')
 
 def get_MANE_row(gene_name):
     rows = MANE_transcripts.query('symbol == @gene_name')
@@ -119,7 +122,8 @@ class Editor:
 class BaseEditableVariant:
     def __init__(self, var_g, gene_name=None, install=False):
         if isinstance(var_g, str):
-            var_g = hgvs.easy.parse(var_g)
+            parser = hgvs.parser.Parser()
+            var_g = parser.parse(var_g)
 
         self.var_g = var_g
 
