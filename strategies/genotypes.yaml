@@ -8,6 +8,12 @@ DEB153:
   variants:
     - NC_000003.12:g.48566912G>A
 
+NueSKIN04:
+  genome: hg38
+  variants:
+    - NC_000001.11:g.209625721G>A
+    - NC_000001.11:g.209629896A>G
+
 NueSKIN06:
   genome: hg38
   variants:
@@ -64,6 +70,11 @@ MAPT_R406W:
   variants:
     - NC_000017.11:g.46024061C>T
 
+MAPT_V337M:
+  genome: hg38
+  variants:
+    - NC_000017.11:g.46018629G>A
+
 NuSKIN10:
   genome: hg38
   variants:
@@ -77,4 +88,38 @@ Huh7-ASS1-lenti:
     - NC_000009.12:g.130489464G>A
     - NC_000002.12:g.210591886C>T
 
-    
+PDE6B_Lenti:
+  genome: hg38
+  insert: PDE6B_Lenti
+  variant_flanking_regions:
+    - NC_000004.12:g.654889G>C
+    - NC_000004.12:g.664945G>A
+    - NC_000007.14:g.74777267_74777268del
+
+AEGIS_001:
+  genome: hg38
+  insert: AEGIS_001
+  variant_flanking_regions:
+    - NC_000023.11:g.136659287C>T
+    - NC_000023.11:g.136659185C>T
+    - NC_000023.11:g.136659107C>T
+    - NC_000023.11:g.136650317C>T
+
+AEGIS_002:
+  genome: hg38
+  insert: AEGIS_002
+  variant_flanking_regions:
+    - NC_000023.11:g.136659149C>T
+    - NC_000023.11:g.136650377C>T
+    - NC_000023.11:g.136659399G>A
+    - NC_000023.11:g.101354688G>A
+    - NC_000023.11:g.101349944G>A
+
+AEGIS_003:
+  genome: hg38
+  insert: AEGIS_003
+  variant_flanking_regions:
+    - NC_000023.11:g.101375203G>A
+    - NC_000023.11:g.101360581G>A
+    - NC_000023.11:g.101359325G>A
+    - NC_000023.11:g.101356060G>A
