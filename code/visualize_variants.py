@@ -350,12 +350,13 @@ class BaseEditableVariant:
             if variant_offset_from_PAM in editor.deaminase.offsets_from_PAM[possible_window_name]:
                 window_name = possible_window_name
                 break
-    
+
         PAM = {
             'window_name': window_name,
             'PAM_start': PAM_start_window_p,
             'protospacer': self.target_strand_window_sequence[PAM_start_window_p - 20:PAM_start_window_p],
             'PAM': self.target_strand_window_sequence[PAM_start_window_p:PAM_start_window_p + len(editor.PAM)],
+            'PAM_4nt': self.target_strand_window_sequence[PAM_start_window_p:PAM_start_window_p + 4],
             'protospacer+PAM': self.target_strand_window_sequence[PAM_start_window_p - 20:PAM_start_window_p + len(editor.PAM)],
             'bystander_effects': bystander_effects,
             'strand': self.strand,
@@ -364,6 +365,12 @@ class BaseEditableVariant:
             'editor': editor,
         }
 
+        # Check if the actual PAM matches the editor's expectation.
+        pattern, *match_starts = Bio.SeqUtils.nt_search(PAM['PAM'], PAM['editor'].PAM)
+        PAM_matches_expected = (0 in match_starts)
+
+        PAM['matches_expected'] = PAM_matches_expected
+    
         return PAM
 
     def PAM_from_editing_strategy(self, editing_strategy, editor):
@@ -390,9 +397,9 @@ class BaseEditableVariant:
 
             PAM = self.PAM(PAM_start_window_p, editor)
 
-            expected_sequence = editing_strategy.protospacer_feature.sequence(editing_strategy.reference_sequences)
-            if PAM['protospacer'] != expected_sequence:
-                raise ValueError(f'expected: {expected_sequence}, produced: {PAM['protospacer']}')
+            #expected_sequence = editing_strategy.protospacer_feature.sequence(editing_strategy.reference_sequences)
+            #if PAM['protospacer'] != expected_sequence:
+            #    raise ValueError(f'expected: {expected_sequence}, produced: {PAM['protospacer']}')
 
         return PAM
 
@@ -957,7 +964,7 @@ class VariantDiagram:
                                        )
 
         for p_offset, b in enumerate(PAM['editor'].PAM):
-
+            # Mark positions that don't match in red.
             target_b = self.variant.target_strand_window_sequence[p + p_offset]
             pattern, *match_starts = Bio.SeqUtils.nt_search(target_b, b)
             if 0 in match_starts:

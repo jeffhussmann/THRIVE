@@ -89,6 +89,17 @@ class Screen:
         exp = self.row_to_exp(row)
         return exp.outcome_counts()
 
+    def row_to_PAM(self, row):
+        exp = self.row_to_exp(row)
+
+        if exp.editing_strategy.protospacer_feature is not None:
+            editor = visualize_variants.Editor(row['condition:deaminase'], exp.editing_strategy.effector.PAM_pattern)
+            PAM = self.variant.PAM_from_editing_strategy(exp.editing_strategy, editor)
+        else:
+            PAM = None
+
+        return PAM
+
     @memoized_property
     def fractions(self):
         relevant_rows = self.sample_sheet.query('primers == @self.variant_primers')
@@ -158,6 +169,8 @@ class Screen:
                         contain_corrective.append((c, s, d))
 
             contain_corrective_f = outcome_fractions.loc[contain_corrective].sum()
+
+            PAM = self.row_to_PAM(row)
             
             row_data = {
                 'precise': precise_f * 100,
@@ -166,6 +179,8 @@ class Screen:
                 'contains_corrective': contain_corrective_f * 100,
                 'unedited': row['condition:variant'] != str(self.variant.var_g),
                 'read_count': total_reads,
+                'PAM_4nt': PAM['PAM_4nt'] if PAM is not None else '',
+                'PAM_matches_expected': PAM['matches_expected'] if PAM is not None else False,
             }
 
             if self.specific_unedited_variant is not None:
@@ -458,7 +473,7 @@ class Screen:
                         color=color,
                         alpha=alpha,
                         clip_on=False,
-                    )
+                       )
 
                 ax.plot([x_mean - x_sem, x_mean + x_sem], [y_mean, y_mean],
                         marker='none',
@@ -472,7 +487,7 @@ class Screen:
                         linestyle='-',
                         color=color,
                         alpha=0.3,
-                    )
+                       )
 
             else:
                 for _, row in rows.iterrows():
@@ -482,7 +497,7 @@ class Screen:
                             markeredgewidth=0,
                             color=color,
                             alpha=0.9,
-                        )
+                           )
 
                     ax.annotate(row['sample_name'].split('_')[-1],
                                 xy=(row['precise'], row['imprecise']),
@@ -492,7 +507,7 @@ class Screen:
                                 va='bottom',
                                 size=6,
                                 color=color,
-                        )
+                               )
 
 
         ax.set_xlim(0)
@@ -523,10 +538,11 @@ class Screen:
             outcome_counts = self.row_to_outcome_counts(row)
             outcome_fractions = outcome_counts / outcome_counts.sum()
 
-            fs[row['batch_name'], row['sample_name'], row['sgRNAs'], row['condition:deaminase']] = outcome_fractions
+            values = tuple(row[key] for key in self.exp_keys)
+            fs[values] = outcome_fractions
 
         fs = pd.DataFrame(fs).fillna(0)
-        fs.columns.names = ['batch_name', 'sample_name', 'sgRNA', 'deaminase']
+        fs.columns.names = self.exp_keys
 
         mismatch_fractions = knock_knock.outcome.mismatch_fractions(strat,
                                                                     fs,
@@ -544,11 +560,7 @@ class Screen:
 
         for sgRNA, rows in self.fractions.query('unedited == False').groupby('sgRNAs'):
             row = rows.iloc[0]
-            exp = self.exps[row['batch_name'], row['sample_name']]
-
-            editor = visualize_variants.Editor(row['condition:deaminase'], exp.editing_strategy.effector.PAM_pattern)
-            
-            PAM = self.variant.PAM_from_editing_strategy(exp.editing_strategy, editor)
+            PAM = self.row_to_PAM(row)
 
             sgRNA_to_variant_position_in_protospacer[sgRNA] = PAM['variant_position_in_protospacer']
 
@@ -558,11 +570,31 @@ class Screen:
 
         return sgRNA_order
 
+    @memoized_property
+    def processed_mismatch_fractions(self):
+        if self.variant.strand == '+':
+            b_from = 'A'
+            b_to = 'G'
+
+        else:
+            b_from = 'T'
+            b_to = 'C'
+
+        all_A_to_Gs = self.mismatch_fractions.xs(b_from, level='base').xs(b_to, axis=1, level='base')
+        all_A_to_Gs.sort_index(axis=1, inplace=True)
+
+        relevant_bases = [b for b in 'TCAG' if b != b_from]
+        all_non_As = self.mismatch_fractions.loc[pd.IndexSlice[:, relevant_bases], :].droplevel('base').T.groupby(self.exp_keys).sum().T
+        all_non_As.sort_index(axis=1, inplace=True)
+
+        return all_A_to_Gs, all_non_As
+
     def heatmap(self,
                 colorblind=False,
                 use_log_for_bystanders=True,
                 editor_subset=None,
                 sgRNA_subset=None,
+                batch_name_subset=None,
                 min_value_to_label=0.1,
                ):
 
@@ -574,23 +606,7 @@ class Screen:
 
         i = 2.5
 
-        mismatch_fractions = self.mismatch_fractions
-        precise_fractions = self.fractions
-
-        if self.variant.strand == '+':
-            b_from = 'A'
-            b_to = 'G'
-
-        else:
-            b_from = 'T'
-            b_to = 'C'
-
-        all_A_to_Gs = mismatch_fractions.xs(b_from, level='base').xs(b_to, axis=1, level='base')
-        all_A_to_Gs.sort_index(axis=1, inplace=True)
-
-        relevant_bases = [b for b in 'TCAG' if b != b_from]
-        all_non_As = mismatch_fractions.loc[pd.IndexSlice[:, relevant_bases], :].droplevel('base').T.groupby(['batch_name', 'sample_name']).sum().T
-        all_non_As.sort_index(axis=1, inplace=True)
+        all_A_to_Gs, all_non_As = self.processed_mismatch_fractions
 
         unedited_order = [
             True,
@@ -601,7 +617,10 @@ class Screen:
             unedited_order = unedited_order[::-1]
 
         for unedited in unedited_order:
-            unedited_rows = precise_fractions.query('unedited == @unedited')
+            unedited_rows = self.fractions.query('unedited == @unedited')
+
+            if batch_name_subset is not None:
+                unedited_rows = unedited_rows.query('batch_name in @batch_name_subset')
 
             if unedited:
                 unedited_rows = unedited_rows.copy()
@@ -637,7 +656,7 @@ class Screen:
 
                     editor_rows = sgRNA_rows.query('`condition:editor` == @editor_name')
 
-                    keys = editor_rows[['batch_name', 'sample_name']].values
+                    keys = editor_rows[self.exp_keys].values
 
                     A_to_Gs = pd.concat([all_A_to_Gs[tuple(k)] for k in keys], axis=1).mean(axis=1) * 100
 
@@ -657,8 +676,8 @@ class Screen:
                                              min_value_to_label=min_value_to_label,
                                             )
 
-                    exp = self.exps[tuple(keys[0])]
-                    
+                    exp = self.row_to_exp(editor_rows.iloc[0])                    
+
                     if not unedited:
                         if exp.editing_strategy.primary_protospacer is not None:
                             
